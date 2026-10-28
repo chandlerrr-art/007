@@ -14,7 +14,7 @@ from app.models import AuditEvent, Endpoint, Evidence, Finding, InventorySnapsho
 from app.safety.policy import ScopeRejected, validate_target_url
 from app.scans.orchestrator import run_scan
 
-app = FastAPI(title="SentinelFlow API", version="0.1.0", description="Local-first authorized security testing platform")
+app = FastAPI(title="007 API", version="0.1.0", description="Local-first authorized security testing platform")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],

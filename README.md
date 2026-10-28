@@ -1,6 +1,6 @@
-# SentinelFlow
+# 007
 
-SentinelFlow is a local-first, authorized application security testing platform. This first milestone provides a runnable foundation: a FastAPI service, PostgreSQL database, repeatable schema migration, synthetic seed data, and a dashboard that reads live data from the API.
+007 is a local-first, authorized application security testing platform. This first milestone provides a runnable foundation: a FastAPI service, PostgreSQL database, repeatable schema migration, synthetic seed data, and a dashboard that reads live data from the API.
 
 ## Requirements
 

@@ -66,7 +66,7 @@ export default function Dashboard() {
       <div className="page-wrap">
         <div className="welcome"><div><div className="eyebrow">LOCAL WORKSPACE <span className="live-dot"/> SYSTEM STATUS</div><h1>Security overview</h1><p>Track authorized scan activity and application risk across your targets.</p></div><button className="primary-button" onClick={startScan} disabled={busy || !data.targets.length} title="Runs the bounded local demo access-control check"><span>＋</span> {busy ? "Starting…" : "New scan"}</button></div>
         {error && <div className="alert">{error}</div>}
-        <div className="section-heading"><div><h2>At a glance</h2><p>Live summary from your SentinelFlow workspace</p></div><span className="refresh-note">{loaded ? "Updated just now" : "Connecting to API…"}</span></div>
+        <div className="section-heading"><div><h2>At a glance</h2><p>Live summary from your 007 workspace</p></div><span className="refresh-note">{loaded ? "Updated just now" : "Connecting to API…"}</span></div>
 
         <div className="metric-grid">
           <Metric label="ACTIVE SCANS" value={data.summary.active_scans} icon="◉" tone="blue" detail="Across all targets" />
@@ -91,7 +91,7 @@ export default function Dashboard() {
           <section className="card" id="scans"><div className="card-head"><div><h2>Recent scan activity</h2><p>Latest runs across your authorized targets</p></div><a href="#scans" className="text-link">Scan history <span>→</span></a></div><div className="scan-list">{data.scans.map((scan) => <div className="scan-row" key={scan.id}><span className={`scan-icon ${scan.status}`}>⌕</span><div className="scan-info"><b>{scan.target}</b><span>{scan.trigger} scan · {new Date(scan.started_at).toLocaleString()}</span></div><span className={`scan-state ${scan.status}`}>{scan.status}</span>{["queued", "running", "cancel_requested"].includes(scan.status) && <button className="cancel-button" onClick={() => cancelScan(scan.id)}>Stop</button>}<span className="scan-summary">{scan.summary}{scan.status === "completed" && <> · <a href={`${API}/api/scans/${scan.id}/report`} target="_blank" rel="noreferrer">Report</a></>}</span></div>)}{!data.scans.length && <div className="empty scan-empty">{loaded ? "No scan activity yet." : "Loading scan activity…"}</div>}</div></section>
           <section className="card targets-card" id="targets"><div className="card-head"><div><h2>Authorized targets</h2><p>In-scope applications</p></div><a href="#targets" className="text-link">Manage <span>→</span></a></div><div className="target-list">{data.targets.map((target) => <div className="target-row" key={target.id}><div className="target-icon">{target.name.slice(0, 1)}</div><div className="target-info"><b>{target.name}</b><span>{target.base_url}</span></div><span className="authorized"><i/>{target.status}</span></div>)}{!data.targets.length && <div className="empty">{loaded ? "No targets configured." : "Loading targets…"}</div>}</div><div className="scope-note"><span>ⓘ</span><div><b>Scope is enforced by the backend</b><p>Only explicitly authorized targets can be scanned.</p></div></div></section>
         </div>
-        <footer><span>SentinelFlow <b>·</b> Local demo workspace</span><span><i className="live-dot"/> All systems operational</span></footer>
+        <footer><span>007 <b>·</b> Local demo workspace</span><span><i className="live-dot"/> All systems operational</span></footer>
       </div>
     </section>
   </main>;

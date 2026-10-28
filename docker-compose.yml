@@ -2,15 +2,15 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-sentinelflow}
-      POSTGRES_USER: ${POSTGRES_USER:-sentinelflow}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinelflow-local-only}
+      POSTGRES_DB: ${POSTGRES_DB:-007}
+      POSTGRES_USER: ${POSTGRES_USER:-007}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-007-local-only}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sentinelflow} -d ${POSTGRES_DB:-sentinelflow}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-007} -d ${POSTGRES_DB:-007}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -18,7 +18,7 @@ services:
   api:
     build: ./services/api
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://sentinelflow:sentinelflow-local-only@db:5432/sentinelflow}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://007:007-local-only@db:5432/007}
       ALLOWED_TARGET_ORIGINS: ${ALLOWED_TARGET_ORIGINS:-http://demo-app:8080}
     ports:
       - "127.0.0.1:8000:8000"

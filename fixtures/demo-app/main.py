@@ -2,7 +2,7 @@ import os
 
 from fastapi import FastAPI, Header, HTTPException
 
-app = FastAPI(title="SentinelFlow Synthetic Booking Fixture")
+app = FastAPI(title="007 Synthetic Booking Fixture")
 FIXED = os.getenv("DEMO_FIX_IDOR", "false").lower() in {"1", "true", "yes"}
 BOOKINGS = {
     "1001": {"booking_id": "1001", "agency_id": "agency-a", "traveler": "Synthetic Traveler A", "total": 420.00},

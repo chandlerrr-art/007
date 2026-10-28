@@ -44,7 +44,7 @@ def seed() -> None:
         db.flush()
         db.add(Evidence(finding_id=finding.id, kind="seed_note", summary="Illustrative unverified record for dashboard layout. It is not a scan result.", redacted=True))
         db.commit()
-        print("Inserted synthetic SentinelFlow dashboard data.")
+        print("Inserted synthetic 007 dashboard data.")
 
 
 if __name__ == "__main__":

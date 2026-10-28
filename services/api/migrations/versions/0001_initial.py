@@ -1,4 +1,4 @@
-"""Create SentinelFlow's initial inventory and scan schema."""
+"""Create 007's initial inventory and scan schema."""
 from alembic import op
 import sqlalchemy as sa
 
