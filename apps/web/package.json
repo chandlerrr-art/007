@@ -1,0 +1,8 @@
+{
+  "name": "sentinelflow-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {"dev": "next dev -H 0.0.0.0", "build": "next build", "start": "next start -H 0.0.0.0"},
+  "dependencies": {"next": "15.1.6", "react": "19.0.0", "react-dom": "19.0.0"},
+  "devDependencies": {"@types/node": "^22.10.2", "@types/react": "^19.0.3", "@types/react-dom": "^19.0.2", "typescript": "^5.7.2"}
+}
