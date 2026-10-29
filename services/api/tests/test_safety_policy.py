@@ -1,7 +1,7 @@
 import unittest
 
 from app.models import Target
-from app.safety.policy import ScopeRejected, TokenBucket, assert_request_scope, validate_target_url
+from app.safety.policy import ScopeRejected, TokenBucket, assert_request_scope, redact_operational_text, supports_demo_executor, validate_target_url
 from app.settings import settings
 
 
@@ -29,6 +29,23 @@ class TargetScopeTests(unittest.TestCase):
         assert_request_scope(target, "http://demo-app:8080/api/v1/bookings/2002")
         with self.assertRaises(ScopeRejected):
             assert_request_scope(target, "http://example.com/api/v1/bookings/2002")
+
+    def test_malformed_port_is_a_scope_rejection(self) -> None:
+        with self.assertRaises(ScopeRejected):
+            validate_target_url("http://demo-app:not-a-port")
+
+    def test_executor_is_limited_to_the_synthetic_demo_environment(self) -> None:
+        demo = Target(name="demo", base_url="http://demo-app:8080", environment="local-demo", status="authorized")
+        staging = Target(name="staging", base_url="http://demo-app:8080", environment="staging", status="authorized")
+        self.assertTrue(supports_demo_executor(demo))
+        self.assertFalse(supports_demo_executor(staging))
+
+    def test_operational_text_redacts_credentials_and_identifiers(self) -> None:
+        safe = redact_operational_text("incident Bearer abc.def password=hunter email=dev@example.com +1 (555) 123-4567")
+        self.assertNotIn("abc.def", safe)
+        self.assertNotIn("hunter", safe)
+        self.assertNotIn("dev@example.com", safe)
+        self.assertNotIn("555", safe)
 
 
 class TokenBucketTests(unittest.TestCase):
