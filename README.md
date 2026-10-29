@@ -44,7 +44,7 @@ The demo app is deliberately vulnerable only to a synthetic cross-agency booking
 
 To demonstrate remediation, change `DEMO_FIX_IDOR=false` to `DEMO_FIX_IDOR=true` in `.env`, then recreate the fixture with `docker compose up -d --build demo-app`. Start another scan, or submit `POST /api/findings/{finding_id}/retest` in the API docs. A successful retest marks the previous finding resolved.
 
-Target registration requires a match in `ALLOWED_TARGET_ORIGINS`; every outgoing request checks the allowlist again. The default list contains only the local demo origin. A staging origin can be recorded for inventory work, but this demo executor will refuse to scan it.
+Target registration requires an exact origin in `ALLOWED_TARGET_ORIGINS`; add only origins you own or are explicitly authorized to test, separated by commas, then recreate the API service. Allowlisted targets can be registered for inventory and HAR import. Active scanning remains restricted to the local synthetic demo because no executor supports other targets; every outgoing scan request is checked against the allowlist again.
 
 To reset the local demo database, run `docker compose down -v` and repeat the setup. This removes the local database volume.
 
