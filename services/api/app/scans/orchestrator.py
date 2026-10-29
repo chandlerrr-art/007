@@ -125,7 +125,8 @@ def _run_access_control_check(db, scan: Scan, target: Target, endpoint: Endpoint
             response = _bounded_get(db, scan.id, client, target, url, {"X-Demo-Agency": "agency-a"}, counter)
             is_candidate = response.status_code == 200 and response.headers.get("content-type", "").startswith("application/json")
             try:
-                body = response.json() if is_candidate else {}
+                decoded = response.json() if is_candidate else {}
+                body = decoded if isinstance(decoded, dict) else {}
             except ValueError:
                 body = {}
             is_candidate = is_candidate and body.get("booking_id") == booking_id and body.get("agency_id") == "agency-b"
@@ -143,7 +144,8 @@ def _run_access_control_check(db, scan: Scan, target: Target, endpoint: Endpoint
             if is_candidate:
                 confirm = _bounded_get(db, scan.id, client, target, url, {"X-Demo-Agency": "agency-a"}, counter)
                 try:
-                    confirm_body = confirm.json()
+                    decoded = confirm.json()
+                    confirm_body = decoded if isinstance(decoded, dict) else {}
                 except ValueError:
                     confirm_body = {}
                 is_vulnerable = confirm.status_code == 200 and confirm_body.get("booking_id") == booking_id and confirm_body.get("agency_id") == "agency-b"
@@ -191,7 +193,14 @@ def _run_scan(scan_id: int, target_id: int, retest_finding_id: int | None = None
     with SessionLocal() as db:
         scan = db.get(Scan, scan_id)
         target = db.get(Target, target_id)
-        if not scan or not target:
+        if not scan:
+            return
+        if not target:
+            scan.status = "failed"
+            scan.summary = "Target no longer exists; scan stopped before scope validation."
+            scan.finished_at = _now()
+            _audit(db, scan.id, "scan_stopped", "deny", scan.summary)
+            db.commit()
             return
         try:
             scan.status = "running"
@@ -253,6 +262,7 @@ def _run_scan(scan_id: int, target_id: int, retest_finding_id: int | None = None
             scan.finished_at = _now()
             db.commit()
         except Exception as exc:
+            db.rollback()
             scan = db.get(Scan, scan_id)
             if scan:
                 if str(exc) == _SCAN_CANCELLED:

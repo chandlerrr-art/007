@@ -172,7 +172,7 @@ class ScanOrchestrationTests(unittest.TestCase):
         self.assertEqual(scan.status, "halted")
         self.assertTrue(any(s.name == "independent_verification" and s.status == "failed" for s in stages))
         self.assertFalse(findings)
-        self.assertTrue(any(a.event_type == "outbound_request" and a.decision == "deny" for a in audits))
+        self.assertTrue(any(a.event_type == "scan_stopped" and a.decision == "cancel" for a in audits))
         self.assertEqual(len(self.client.requests), 2)
 
     def test_request_budget_exhaustion_fails_verification_stage(self):
@@ -185,6 +185,38 @@ class ScanOrchestrationTests(unittest.TestCase):
         self.assertTrue(any(s.name == "independent_verification" and s.status == "failed" for s in stages))
         self.assertFalse(findings)
         self.assertTrue(any(a.event_type == "outbound_request" and a.decision == "deny" for a in audits))
+
+    def test_allowlist_failure_is_recorded_before_any_request(self):
+        scan_id = self.add_scan()
+        with self.session_factory() as db:
+            db.get(Target, self.target_id).base_url = "https://outside.invalid"
+            db.commit()
+        self.respond_with([])
+        self.run_with_fake_client(scan_id)
+        scan, stages, _audits, findings = self.scan_records(scan_id)
+        self.assertEqual(scan.status, "failed")
+        self.assertTrue(any(stage.name == "scope_validation" and stage.status == "failed" for stage in stages))
+        self.assertFalse(self.client.requests)
+        self.assertFalse(findings)
+
+    def test_per_endpoint_rate_limit_denies_and_audits_request(self):
+        from unittest.mock import patch
+        from app.safety.policy import RateLimited
+
+        def rate_limit_only_booking(_target, path):
+            if "bookings" in path:
+                raise RateLimited("test rate limit")
+
+        self.respond_with([json_response(200)])
+        scan_id = self.add_scan()
+        with patch.object(orchestrator, "assert_rate_limit", side_effect=rate_limit_only_booking):
+            self.run_with_fake_client(scan_id)
+        scan, stages, audits, findings = self.scan_records(scan_id)
+        self.assertEqual(scan.status, "failed")
+        self.assertTrue(any(stage.name == "access_control_check" and stage.status == "failed" for stage in stages))
+        self.assertTrue(any(event.event_type == "outbound_request" and event.decision == "deny" for event in audits))
+        self.assertFalse(findings)
+        self.assertEqual(len(self.client.requests), 1)
 
     def test_repeated_scan_deduplicates_finding_and_retains_evidence(self):
         exposed = {"booking_id": "2002", "agency_id": "agency-b"}
@@ -217,6 +249,22 @@ class ScanOrchestrationTests(unittest.TestCase):
         with self.session_factory() as db:
             self.assertEqual(db.get(Finding, finding_id).status, "resolved")
             self.assertEqual(db.get(Scan, retest_id).status, "completed")
+
+    def test_retest_keeps_original_finding_open_when_issue_remains(self):
+        original_scan_id = self.add_scan()
+        with self.session_factory() as db:
+            finding = Finding(scan_id=original_scan_id, endpoint_id=self.endpoint_id, title="IDOR", category="access_control", severity="high", confidence="high", business_impact="Synthetic test", status="resolved", verified=True)
+            db.add(finding)
+            db.flush()
+            finding_id = finding.id
+            db.commit()
+        retest_id = self.add_scan()
+        exposed = {"booking_id": "2002", "agency_id": "agency-b"}
+        self.respond_with([json_response(200), json_response(200, exposed), json_response(200, exposed), json_response(200)])
+        self.run_with_fake_client(retest_id, retest_finding_id=finding_id)
+        with self.session_factory() as db:
+            self.assertEqual(db.get(Finding, finding_id).status, "open")
+            self.assertEqual(len(db.execute(select(Finding)).scalars().all()), 1)
 
 
 if __name__ == "__main__":

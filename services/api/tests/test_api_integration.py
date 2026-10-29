@@ -1,5 +1,6 @@
 import json
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -9,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
+from app.models import Finding, Scan
 from app.settings import settings
 
 
@@ -48,17 +50,21 @@ class ApiIntegrationTests(unittest.TestCase):
         target_id = target_response.json()["id"]
         har = {"log": {"entries": [
             {"request": {"method": "GET", "url": "http://demo-app:8080/api/v1/bookings/2002?token=do-not-store"}},
+            {"request": {"method": "GET", "url": "http://demo-app:8080/api/v1/users/private@example.com?session=do-not-store"}},
             {"request": {"method": "GET", "url": "https://outside.example/private"}},
         ]}}
         imported = self.client.post(f"/api/targets/{target_id}/har-import", json={"content": json.dumps(har)})
         self.assertEqual(imported.status_code, 200)
-        self.assertEqual(imported.json()["inserted"], 1)
+        self.assertEqual(imported.json()["inserted"], 2)
         self.assertNotIn("do-not-store", imported.text)
+        paths = [row["path"] for row in self.client.get(f"/api/targets/{target_id}/endpoints").json()]
+        self.assertIn("/api/v1/users/{id}", paths)
+        self.assertNotIn("private@example.com", str(paths))
 
     @patch("app.main.run_scan")
     def test_deploy_webhook_records_change_event_and_autostarts_scan(self, mock_run_scan) -> None:
         target_id = self.client.post("/api/targets", json={"name": "Local demo", "base_url": "http://demo-app:8080", "environment": "local-demo"}).json()["id"]
-        response = self.client.post("/api/webhooks/deploy", json={"target_id": target_id, "release": "v1.2.3"})
+        response = self.client.post("/api/webhooks/deploy", json={"target_id": target_id, "release": "v1.2.3", "note": "private@example.com token=never-store"})
         self.assertEqual(response.status_code, 202)
         mock_run_scan.assert_called_once()
         body = response.json()
@@ -69,6 +75,39 @@ class ApiIntegrationTests(unittest.TestCase):
         self.assertEqual(len(changes), 1)
         self.assertEqual(changes[0]["source"], "ci_cd_webhook")
         self.assertEqual(changes[0]["triggered_scan_id"], body["scan_id"])
+        self.assertNotIn("private@example.com", str(changes))
+        self.assertNotIn("never-store", str(changes))
+
+    def test_deploy_release_field_rejects_free_form_secret_text(self) -> None:
+        response = self.client.post("/api/webhooks/deploy", json={"target_id": 1, "release": "token=secret-value"})
+        self.assertEqual(response.status_code, 422)
+
+    @patch("app.main.run_scan")
+    def test_manual_scan_is_queued_for_supported_demo(self, mock_run_scan) -> None:
+        target_id = self.client.post("/api/targets", json={"name": "Local demo", "base_url": "http://demo-app:8080", "environment": "local-demo"}).json()["id"]
+        response = self.client.post("/api/scans", json={"target_id": target_id})
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "queued")
+        mock_run_scan.assert_called_once()
+        scan_id = response.json()["id"]
+        self.assertEqual(self.client.get(f"/api/scans/{scan_id}").json()["status"], "queued")
+        report = self.client.get(f"/api/scans/{scan_id}/report")
+        self.assertEqual(report.status_code, 200)
+        self.assertEqual(report.json()["findings"], [])
+
+    def test_retest_rejects_findings_without_a_supported_verified_executor(self) -> None:
+        target_id = self.client.post("/api/targets", json={"name": "Local demo", "base_url": "http://demo-app:8080", "environment": "local-demo"}).json()["id"]
+        with self.session_factory() as db:
+            scan = Scan(target_id=target_id, status="completed", trigger="manual", started_at=datetime.now(timezone.utc), summary="fixture")
+            db.add(scan)
+            db.flush()
+            finding = Finding(scan_id=scan.id, title="Sample", category="demo_sample", severity="high", confidence="low", business_impact="sample", status="needs_verification", verified=False)
+            db.add(finding)
+            db.flush()
+            finding_id = finding.id
+            db.commit()
+        response = self.client.post(f"/api/findings/{finding_id}/retest")
+        self.assertEqual(response.status_code, 422)
 
     def test_kill_switch_blocks_future_scans_until_cleared(self) -> None:
         target_id = self.client.post("/api/targets", json={"name": "Local demo", "base_url": "http://demo-app:8080", "environment": "local-demo"}).json()["id"]
@@ -76,6 +115,10 @@ class ApiIntegrationTests(unittest.TestCase):
         engaged = self.client.post("/api/safety/kill-switch", json={"engaged": True, "reason": "incident drill"})
         self.assertEqual(engaged.status_code, 200)
         self.assertTrue(self.client.get("/api/safety/status").json()["kill_switch_engaged"])
+        self.assertTrue(engaged.json()["updated_at"])
+
+        manual = self.client.post("/api/scans", json={"target_id": target_id})
+        self.assertEqual(manual.status_code, 409)
 
         webhook = self.client.post("/api/webhooks/deploy", json={"target_id": target_id, "release": "v2.0.0"})
         self.assertEqual(webhook.status_code, 202)
@@ -84,6 +127,12 @@ class ApiIntegrationTests(unittest.TestCase):
 
         cleared = self.client.post("/api/safety/kill-switch", json={"engaged": False, "reason": ""})
         self.assertFalse(cleared.json()["kill_switch_engaged"])
+
+    def test_kill_switch_reason_is_sanitized_before_persistence(self) -> None:
+        self.client.post("/api/safety/kill-switch", json={"engaged": True, "reason": "Bearer very-secret private@example.com"})
+        status = self.client.get("/api/safety/status").json()
+        self.assertNotIn("very-secret", status["reason"])
+        self.assertNotIn("private@example.com", status["reason"])
 
 
 if __name__ == "__main__":

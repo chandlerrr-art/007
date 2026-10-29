@@ -96,8 +96,10 @@ def validate_target_url(url: str) -> str:
 def supports_demo_executor(target: Target) -> bool:
     """Only the deliberately vulnerable, in-network fixture supports active checks."""
     try:
-        return target.environment == "local-demo" and validate_target_url(target.base_url) == "http://demo-app:8080"
-    except ScopeRejected:
+        parsed = urlsplit(target.base_url)
+        return (target.environment == "local-demo" and parsed.path in {"", "/"}
+                and validate_target_url(target.base_url) == "http://demo-app:8080")
+    except ValueError:
         return False
 
 
@@ -116,9 +118,12 @@ def assert_rate_limit(target: Target, path: str) -> None:
         raise RateLimited(f"Rate limit exceeded for {path}; back off before retrying.")
 
 
-def get_safety_control(db) -> SafetyControl:
+def get_safety_control(db, *, lock: bool = False) -> SafetyControl:
     """Fetch (or lazily create) the single safety-control row holding the kill switch."""
-    control = db.execute(select(SafetyControl).where(SafetyControl.id == 1).execution_options(populate_existing=True)).scalars().first()
+    statement = select(SafetyControl).where(SafetyControl.id == 1).execution_options(populate_existing=True)
+    if lock:
+        statement = statement.with_for_update()
+    control = db.execute(statement).scalars().first()
     if control is None:
         control = SafetyControl(id=1, kill_switch_engaged=False, reason="")
         db.add(control)

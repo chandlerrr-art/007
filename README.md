@@ -23,7 +23,7 @@
    docker compose exec api python -m app.seed
    ```
 
-4. Run the scope policy unit tests:
+4. Run the backend unit, integration, orchestration, and migration tests:
 
    ```powershell
    docker compose exec api python -m unittest discover -s tests
@@ -38,7 +38,9 @@
 6. Open <http://localhost:3000>. Click **New scan** to run the bounded check against the seeded localhost demo target. The API health endpoint is <http://localhost:8000/api/health> and its OpenAPI page is <http://localhost:8000/docs>.
 
 
-The demo app is deliberately vulnerable only to a synthetic cross-agency booking read. The current executor refuses to run against anything except `http://demo-app:8080` with environment `local-demo`, even if another origin is added to the target allowlist. It sends at most four requests, uses a three-second timeout, disables redirects and environment proxies, and stores no response body or credentials. Reports are available from completed scan activity and at `/api/scans/{scan_id}/report`.
+The backend exposes health and dashboard summaries; target registration and inventory; HAR import; scan start, status, cancellation, and JSON report; finding retest; safety status and kill switch; deploy webhooks; and the change feed. The OpenAPI page lists the request and response schemas.
+
+The demo app is deliberately vulnerable only to a synthetic cross-agency booking read. The current executor refuses to run against anything except `http://demo-app:8080` with environment `local-demo`, even if another origin is added to the target allowlist. It sends at most four requests, uses a three-second timeout, disables redirects and environment proxies, and stores no response body or credentials. Reports are available from completed scan activity and at `/api/scans/{scan_id}/report`; current scan stage states are at `/api/scans/{scan_id}`.
 
 To demonstrate remediation, change `DEMO_FIX_IDOR=false` to `DEMO_FIX_IDOR=true` in `.env`, then recreate the fixture with `docker compose up -d --build demo-app`. Start another scan, or submit `POST /api/findings/{finding_id}/retest` in the API docs. A successful retest marks the previous finding resolved.
 

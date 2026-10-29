@@ -2,7 +2,7 @@ import json
 import re
 from datetime import datetime, timezone
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -102,6 +102,21 @@ class DashboardChange(BaseModel):
     created_at: datetime
 
 
+class ChangeResponse(DashboardChange):
+    triggered_scan_id: int | None = None
+
+
+class EndpointResponse(BaseModel):
+    id: int
+    target_id: int
+    method: str
+    path: str
+    classification: str
+    sensitivity: str
+    last_seen: datetime
+    source: str
+
+
 class DashboardResponse(BaseModel):
     summary: DashboardSummary
     severity: dict[str, int]
@@ -135,6 +150,17 @@ class StageReport(BaseModel):
     name: str
     status: str
     error: str | None
+
+
+class ScanStatusResponse(BaseModel):
+    id: int
+    target_id: int
+    status: str
+    trigger: str
+    started_at: datetime
+    finished_at: datetime | None
+    summary: str
+    stages: list[StageReport]
 
 
 class FindingReport(BaseModel):
@@ -178,6 +204,28 @@ class HARImportResponse(BaseModel):
     discovered: int
     inserted: int
     note: str
+
+
+HAR_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+HAR_STATIC_RESOURCE_SEGMENTS = {"current", "me", "search", "all", "recent", "active", "quote", "history", "summary"}
+
+
+def normalize_har_path(raw_path: str) -> str:
+    """Normalize dynamic IDs and redact common direct identifiers before inventory storage."""
+    path = unquote(raw_path or "/")
+    path = re.sub(r"[\x00-\x1f\x7f]", "", path)
+    path = re.sub(r"(?i)(?<=[/])[0-9a-f]{8}-[0-9a-f-]{27,}", "{id}", path)
+    path = re.sub(r"(?<=/)\d+(?=/|$)", "{id}", path)
+    path = re.sub(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", "{id}", path)
+    path = re.sub(r"(?<!\w)\+?\d[\d ().-]{7,}\d(?!\w)", "{id}", path)
+    path = re.sub(r"(?i)(/(?:access[_-]?tokens?|tokens?|sessions?|secrets?|api[_-]?keys?)/)[^/]+", r"\1{redacted}", path)
+
+    def normalize_resource(match: re.Match[str]) -> str:
+        if match.group(2).casefold() in HAR_STATIC_RESOURCE_SEGMENTS:
+            return match.group(0)
+        return f"{match.group(1)}{{id}}"
+
+    return re.sub(r"(?i)(/(?:bookings?|users?|agencies|orders?|travelers?|refunds?)/)([^/]+)", normalize_resource, path)
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -233,6 +281,8 @@ def create_target(payload: TargetCreate, db: Session = Depends(get_db)) -> dict:
     try:
         validate_target_url(payload.base_url)
     except ScopeRejected as exc:
+        db.add(AuditEvent(event_type="target_registration_denied", decision="deny", details="Target registration blocked by the configured origin allowlist."))
+        db.commit()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     target = Target(name=payload.name, base_url=payload.base_url.rstrip("/"), environment=payload.environment,
                     status="authorized", scope_note=payload.scope_note)
@@ -244,6 +294,16 @@ def create_target(payload: TargetCreate, db: Session = Depends(get_db)) -> dict:
     return {"id": target.id, "name": target.name, "base_url": target.base_url, "environment": target.environment, "status": target.status}
 
 
+@app.get("/api/targets/{target_id}/endpoints", response_model=list[EndpointResponse])
+def list_endpoints(target_id: int, db: Session = Depends(get_db)) -> list[dict]:
+    if not db.get(Target, target_id):
+        raise HTTPException(status_code=404, detail="Target not found.")
+    endpoints = db.execute(select(Endpoint).where(Endpoint.target_id == target_id).order_by(Endpoint.method, Endpoint.path)).scalars().all()
+    return [{"id": endpoint.id, "target_id": endpoint.target_id, "method": endpoint.method, "path": endpoint.path,
+             "classification": endpoint.classification, "sensitivity": endpoint.sensitivity,
+             "last_seen": endpoint.last_seen, "source": endpoint.source} for endpoint in endpoints]
+
+
 @app.post("/api/targets/{target_id}/har-import", response_model=HARImportResponse)
 def import_har(target_id: int, payload: HARImport, db: Session = Depends(get_db)) -> dict:
     target = db.get(Target, target_id)
@@ -253,6 +313,8 @@ def import_har(target_id: int, payload: HARImport, db: Session = Depends(get_db)
         validate_target_url(target.base_url)
         har = json.loads(payload.content)
     except (ScopeRejected, json.JSONDecodeError) as exc:
+        db.add(AuditEvent(event_type="har_import_denied", decision="deny", details="HAR import rejected because the target scope or HAR JSON was invalid."))
+        db.commit()
         raise HTTPException(status_code=422, detail=f"Invalid or out-of-scope HAR: {exc}") from exc
     entries = har.get("log", {}).get("entries", []) if isinstance(har, dict) else []
     if not isinstance(entries, list):
@@ -263,13 +325,12 @@ def import_har(target_id: int, payload: HARImport, db: Session = Depends(get_db)
         request = entry.get("request", {}) if isinstance(entry, dict) else {}
         try:
             method = str(request.get("method", "GET")).upper()[:12]
+            if method not in HAR_METHODS:
+                continue
             parts = urlsplit(request.get("url", ""))
             if parts.scheme != base_origin.scheme or parts.netloc.lower() != base_origin.netloc.lower():
                 continue
-            path = parts.path or "/"
-            path = re.sub(r"(?i)(?<=[/])[0-9a-f]{8}-[0-9a-f-]{27,}", "{id}", path)
-            path = re.sub(r"(?<=/)\d+(?=/|$)", "{id}", path)
-            path = re.sub(r"(?i)(/(?:bookings?|users?|agencies|orders?|travelers?|refunds?)/)[^/]+", r"\1{id}", path)
+            path = normalize_har_path(parts.path)
             if len(path) <= 1000:
                 extracted.add((method, path))
         except (TypeError, ValueError):
@@ -303,7 +364,7 @@ def set_kill_switch(payload: KillSwitchUpdate, db: Session = Depends(get_db)) ->
     flag before starting every stage, so the current bounded request still finishes but no
     further stage, and no new scan, will begin until the switch is cleared.
     """
-    control = get_safety_control(db)
+    control = get_safety_control(db, lock=True)
     control.kill_switch_engaged = payload.engaged
     control.reason = redact_operational_text(payload.reason)
     control.updated_at = datetime.now(timezone.utc)
@@ -314,7 +375,7 @@ def set_kill_switch(payload: KillSwitchUpdate, db: Session = Depends(get_db)) ->
             "updated_at": control.updated_at.isoformat() if control.updated_at else None}
 
 
-@app.get("/api/changes")
+@app.get("/api/changes", response_model=list[ChangeResponse])
 def list_changes(db: Session = Depends(get_db)) -> list[dict]:
     rows = db.execute(
         select(ChangeEvent, Target.name).join(Target, ChangeEvent.target_id == Target.id)
@@ -343,7 +404,7 @@ def deploy_webhook(payload: DeployWebhook, background: BackgroundTasks, db: Sess
     db.commit()
     db.refresh(change)
 
-    control = get_safety_control(db)
+    control = get_safety_control(db, lock=True)
     already_running = db.scalar(select(func.count()).select_from(Scan).where(Scan.status.in_(["queued", "running", "cancel_requested"]))) or 0
     if control.kill_switch_engaged or already_running or target.status != "authorized":
         reason = "kill switch engaged" if control.kill_switch_engaged else "a scan is already running" if already_running else "target is not authorized"
@@ -375,13 +436,15 @@ def deploy_webhook(payload: DeployWebhook, background: BackgroundTasks, db: Sess
 
 @app.post("/api/scans", status_code=202, response_model=ScanAcceptedResponse)
 def start_scan(payload: ScanCreate, background: BackgroundTasks, db: Session = Depends(get_db)) -> dict:
-    control = get_safety_control(db)
+    control = get_safety_control(db, lock=True)
     if control.kill_switch_engaged:
         db.add(AuditEvent(event_type="scan_request_denied", decision="deny", details="Manual scan request blocked because the kill switch is engaged."))
         db.commit()
         raise HTTPException(status_code=409, detail="The safety kill switch is engaged.")
     target_id = payload.target_id
     if db.scalar(select(func.count()).select_from(Scan).where(Scan.status.in_(["queued", "running", "cancel_requested"]))) or 0:
+        db.add(AuditEvent(event_type="scan_request_denied", decision="deny", details="Manual scan request blocked because the single scan slot is occupied."))
+        db.commit()
         raise HTTPException(status_code=409, detail="A scan is already queued or running. Concurrency is limited to one scan.")
     target = db.get(Target, target_id)
     if not target:
@@ -389,10 +452,16 @@ def start_scan(payload: ScanCreate, background: BackgroundTasks, db: Session = D
     try:
         validate_target_url(target.base_url)
     except ScopeRejected as exc:
+        db.add(AuditEvent(event_type="scan_request_denied", decision="deny", details=f"Manual scan request for target {target.id} blocked by the allowlist."))
+        db.commit()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if target.status != "authorized":
+        db.add(AuditEvent(event_type="scan_request_denied", decision="deny", details=f"Manual scan request for target {target.id} blocked because it is not authorized."))
+        db.commit()
         raise HTTPException(status_code=403, detail="Target is not authorized.")
     if not supports_demo_executor(target):
+        db.add(AuditEvent(event_type="scan_request_denied", decision="deny", details=f"Manual scan request for target {target.id} blocked because no executor supports it."))
+        db.commit()
         raise HTTPException(status_code=422, detail="The available executor is limited to the local synthetic demo target.")
     scan = Scan(target_id=target.id, status="queued", trigger="manual", started_at=datetime.now(timezone.utc), summary="Waiting to run.", cancel_requested=False)
     db.add(scan)
@@ -416,6 +485,17 @@ def cancel_scan(scan_id: int, db: Session = Depends(get_db)) -> dict:
     db.add(AuditEvent(scan_id=scan.id, event_type="scan_cancel_requested", decision="allow", details="Cancellation requested; current bounded request will finish before the next stage stops."))
     db.commit()
     return {"id": scan.id, "status": scan.status}
+
+
+@app.get("/api/scans/{scan_id}", response_model=ScanStatusResponse)
+def scan_status(scan_id: int, db: Session = Depends(get_db)) -> dict:
+    scan = db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found.")
+    stages = db.execute(select(ScanStage).where(ScanStage.scan_id == scan.id).order_by(ScanStage.id)).scalars().all()
+    return {"id": scan.id, "target_id": scan.target_id, "status": scan.status, "trigger": scan.trigger,
+            "started_at": scan.started_at, "finished_at": scan.finished_at, "summary": scan.summary,
+            "stages": [{"name": stage.name, "status": stage.status, "error": stage.error} for stage in stages]}
 
 
 @app.get("/api/scans/{scan_id}/report", response_model=ScanReportResponse)
@@ -448,23 +528,29 @@ def scan_report(scan_id: int, db: Session = Depends(get_db)) -> dict:
 
 @app.post("/api/findings/{finding_id}/retest", status_code=202, response_model=RetestAcceptedResponse)
 def retest_finding(finding_id: int, background: BackgroundTasks, db: Session = Depends(get_db)) -> dict:
-    control = get_safety_control(db)
+    control = get_safety_control(db, lock=True)
     if control.kill_switch_engaged:
         db.add(AuditEvent(event_type="retest_request_denied", decision="deny", details="Retest request blocked because the kill switch is engaged."))
         db.commit()
         raise HTTPException(status_code=409, detail="The safety kill switch is engaged.")
     if db.scalar(select(func.count()).select_from(Scan).where(Scan.status.in_(["queued", "running", "cancel_requested"]))) or 0:
+        db.add(AuditEvent(event_type="retest_request_denied", decision="deny", details="Retest request blocked because the single scan slot is occupied."))
+        db.commit()
         raise HTTPException(status_code=409, detail="A scan is already queued or running. Concurrency is limited to one scan.")
     finding = db.get(Finding, finding_id)
     if not finding:
         raise HTTPException(status_code=404, detail="Finding not found.")
     if finding.category != "access_control" or not finding.verified:
+        db.add(AuditEvent(event_type="retest_request_denied", decision="deny", details=f"Retest request for finding {finding.id} blocked because no supported verified executor exists."))
+        db.commit()
         raise HTTPException(status_code=422, detail="Only verified access-control findings have a supported retest executor.")
     original_scan = db.get(Scan, finding.scan_id)
     target = db.get(Target, original_scan.target_id) if original_scan else None
     if not target:
         raise HTTPException(status_code=404, detail="Finding target not found.")
     if target.status != "authorized" or not supports_demo_executor(target):
+        db.add(AuditEvent(event_type="retest_request_denied", decision="deny", details=f"Retest request for finding {finding.id} blocked because its target is not an authorized local demo."))
+        db.commit()
         raise HTTPException(status_code=422, detail="Retesting is limited to an authorized local synthetic demo target.")
     try:
         validate_target_url(target.base_url)
