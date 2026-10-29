@@ -1,5 +1,6 @@
 import threading
 import time
+import re
 from urllib.parse import urlsplit
 
 from sqlalchemy.exc import IntegrityError
@@ -19,6 +20,16 @@ class KillSwitchEngaged(RuntimeError):
 
 class RateLimited(RuntimeError):
     """Phase 0.2: the per-endpoint token bucket has no tokens left right now."""
+
+
+def redact_operational_text(value: str) -> str:
+    """Remove common secrets and direct identifiers before retaining operational notes."""
+    value = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "Bearer [REDACTED]", value)
+    value = re.sub(r"(?i)\b(password|passwd|token|secret|api[_-]?key|authorization|cookie)\s*[:=]\s*[^\s,;]+", r"\1=[REDACTED]", value)
+    value = re.sub(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b", "[JWT REDACTED]", value)
+    value = re.sub(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", "[EMAIL REDACTED]", value)
+    value = re.sub(r"(?<!\w)\+?\d[\d ().-]{7,}\d(?!\w)", "[PHONE REDACTED]", value)
+    return value[:500]
 
 
 class TokenBucket:
