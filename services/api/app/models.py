@@ -94,3 +94,23 @@ class AuditEvent(Base):
     decision: Mapped[str] = mapped_column(String(40))
     details: Mapped[str] = mapped_column(String(1000))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ChangeEvent(Base):
+    """Phase 1 (Change Detection): a signal that something changed on a target and may need testing now."""
+    __tablename__ = "change_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_id: Mapped[int] = mapped_column(ForeignKey("targets.id", ondelete="CASCADE"))
+    source: Mapped[str] = mapped_column(String(40))  # ci_cd_webhook | traffic_diff | js_bundle_diff | dns_cert
+    detail: Mapped[str] = mapped_column(String(1000))
+    triggered_scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SafetyControl(Base):
+    """Phase 0 (Safety Layer): a single row holding the global kill switch state."""
+    __tablename__ = "safety_controls"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kill_switch_engaged: Mapped[bool] = mapped_column(Boolean, default=False)
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

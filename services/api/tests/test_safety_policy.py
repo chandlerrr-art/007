@@ -1,7 +1,7 @@
 import unittest
 
 from app.models import Target
-from app.safety.policy import ScopeRejected, assert_request_scope, validate_target_url
+from app.safety.policy import ScopeRejected, TokenBucket, assert_request_scope, validate_target_url
 from app.settings import settings
 
 
@@ -29,6 +29,20 @@ class TargetScopeTests(unittest.TestCase):
         assert_request_scope(target, "http://demo-app:8080/api/v1/bookings/2002")
         with self.assertRaises(ScopeRejected):
             assert_request_scope(target, "http://example.com/api/v1/bookings/2002")
+
+
+class TokenBucketTests(unittest.TestCase):
+    def test_allows_up_to_capacity_then_blocks(self) -> None:
+        bucket = TokenBucket(capacity=2, refill_per_second=0.0)
+        self.assertTrue(bucket.allow("endpoint-a"))
+        self.assertTrue(bucket.allow("endpoint-a"))
+        self.assertFalse(bucket.allow("endpoint-a"))
+
+    def test_keys_are_independent(self) -> None:
+        bucket = TokenBucket(capacity=1, refill_per_second=0.0)
+        self.assertTrue(bucket.allow("endpoint-a"))
+        self.assertFalse(bucket.allow("endpoint-a"))
+        self.assertTrue(bucket.allow("endpoint-b"))
 
 
 if __name__ == "__main__":

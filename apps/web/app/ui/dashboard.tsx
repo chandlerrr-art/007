@@ -8,10 +8,12 @@ type DashboardData = {
   targets: { id: number; name: string; base_url: string; environment: string; status: string }[];
   findings: { id: number; title: string; category: string; severity: string; confidence: string; verified: boolean; status: string; path: string; target: string }[];
   scans: { id: number; target: string; status: string; trigger: string; started_at: string; summary: string }[];
+  changes: { id: number; target: string; source: string; detail: string; created_at: string }[];
+  safety: { kill_switch_engaged: boolean; reason: string };
 };
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const empty: DashboardData = { summary: { active_scans: 0, verified_findings: 0, endpoints: 0, targets: 0 }, severity: {}, targets: [], findings: [], scans: [] };
+const empty: DashboardData = { summary: { active_scans: 0, verified_findings: 0, endpoints: 0, targets: 0 }, severity: {}, targets: [], findings: [], scans: [], changes: [], safety: { kill_switch_engaged: false, reason: "" } };
 
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData>(empty);

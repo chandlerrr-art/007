@@ -10,8 +10,8 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import AuditEvent, Endpoint, Evidence, Finding, InventorySnapshot, Scan, ScanStage, Target
-from app.safety.policy import ScopeRejected, validate_target_url
+from app.models import AuditEvent, ChangeEvent, Endpoint, Evidence, Finding, InventorySnapshot, Scan, ScanStage, Target
+from app.safety.policy import ScopeRejected, get_safety_control, validate_target_url
 from app.scans.orchestrator import run_scan
 
 app = FastAPI(title="007 API", version="0.1.0", description="Local-first authorized security testing platform")
@@ -39,6 +39,17 @@ class ScanCreate(BaseModel):
     target_id: int = Field(gt=0)
 
 
+class DeployWebhook(BaseModel):
+    target_id: int = Field(gt=0)
+    release: str = Field(default="", max_length=200)
+    note: str = Field(default="", max_length=500)
+
+
+class KillSwitchUpdate(BaseModel):
+    engaged: bool
+    reason: str = Field(default="", max_length=500)
+
+
 @app.get("/api/health")
 def health(db: Session = Depends(get_db)) -> dict[str, str]:
     db.execute(text("SELECT 1"))
@@ -59,6 +70,11 @@ def dashboard(db: Session = Depends(get_db)) -> dict:
         select(Scan, Target.name).join(Target, Scan.target_id == Target.id).order_by(Scan.started_at.desc()).limit(6)
     ).all()
     target_rows = db.execute(select(Target).order_by(Target.name)).scalars().all()
+    change_rows = db.execute(
+        select(ChangeEvent, Target.name).join(Target, ChangeEvent.target_id == Target.id)
+        .order_by(ChangeEvent.created_at.desc()).limit(6)
+    ).all()
+    control = get_safety_control(db)
     return {
         "summary": {
             "active_scans": db.scalar(select(func.count()).select_from(Scan).where(Scan.status.in_(["queued", "running", "cancel_requested"]))) or 0,
@@ -70,6 +86,8 @@ def dashboard(db: Session = Depends(get_db)) -> dict:
         "targets": [{"id": t.id, "name": t.name, "base_url": t.base_url, "environment": t.environment, "status": t.status} for t in target_rows],
         "findings": [{"id": f.id, "title": f.title, "category": f.category, "severity": f.severity, "confidence": f.confidence, "verified": f.verified, "status": f.status, "path": path or "Endpoint unavailable", "target": target_name} for f, path, _target_id, target_name in findings],
         "scans": [{"id": scan.id, "target": target_name, "status": scan.status, "trigger": scan.trigger, "started_at": scan.started_at.isoformat(), "summary": scan.summary} for scan, target_name in recent_scans],
+        "changes": [{"id": c.id, "target": name, "source": c.source, "detail": c.detail, "created_at": c.created_at.isoformat()} for c, name in change_rows],
+        "safety": {"kill_switch_engaged": control.kill_switch_engaged, "reason": control.reason},
         "recent_audit_events": db.scalar(select(func.count()).select_from(AuditEvent)) or 0,
     }
 
@@ -138,6 +156,84 @@ def import_har(target_id: int, payload: HARImport, db: Session = Depends(get_db)
     db.add(AuditEvent(event_type="har_imported", decision="allow", details=f"Imported {inserted} new endpoint paths for target {target.name}; query strings and headers discarded."))
     db.commit()
     return {"target_id": target.id, "discovered": len(extracted), "inserted": inserted, "note": "Request headers, cookies, bodies, and query strings were not stored."}
+
+
+@app.get("/api/safety/status")
+def safety_status(db: Session = Depends(get_db)) -> dict:
+    control = get_safety_control(db)
+    return {"kill_switch_engaged": control.kill_switch_engaged, "reason": control.reason,
+            "updated_at": control.updated_at.isoformat() if control.updated_at else None}
+
+
+@app.post("/api/safety/kill-switch")
+def set_kill_switch(payload: KillSwitchUpdate, db: Session = Depends(get_db)) -> dict:
+    """Phase 0.2 kill switch: a single override that halts all agents instantly.
+
+    Engaging it does not touch any in-flight scan directly; the orchestrator checks this
+    flag before starting every stage, so the current bounded request still finishes but no
+    further stage, and no new scan, will begin until the switch is cleared.
+    """
+    control = get_safety_control(db)
+    control.kill_switch_engaged = payload.engaged
+    control.reason = payload.reason
+    control.updated_at = datetime.now(timezone.utc)
+    db.add(AuditEvent(event_type="kill_switch_toggled", decision="allow" if not payload.engaged else "deny",
+        details=f"Kill switch {'engaged' if payload.engaged else 'cleared'}: {payload.reason or 'no reason given'}."))
+    db.commit()
+    return {"kill_switch_engaged": control.kill_switch_engaged, "reason": control.reason}
+
+
+@app.get("/api/changes")
+def list_changes(db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.execute(
+        select(ChangeEvent, Target.name).join(Target, ChangeEvent.target_id == Target.id)
+        .order_by(ChangeEvent.created_at.desc()).limit(20)
+    ).all()
+    return [{"id": c.id, "target": name, "source": c.source, "detail": c.detail,
+             "triggered_scan_id": c.triggered_scan_id, "created_at": c.created_at.isoformat()} for c, name in rows]
+
+
+@app.post("/api/webhooks/deploy", status_code=202)
+def deploy_webhook(payload: DeployWebhook, background: BackgroundTasks, db: Session = Depends(get_db)) -> dict:
+    """Phase 1.1 CI/CD listener: a webhook receiver for deploy events.
+
+    Records the change event unconditionally (for the discovery feed and SLA clock), then
+    auto-starts a bounded scan through the same safety-checked path as a manual scan, unless
+    the kill switch is engaged, the target is not authorized, or a scan is already running.
+    """
+    target = db.get(Target, payload.target_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found.")
+    detail = f"Deploy event for release '{payload.release or 'unspecified'}'." + (f" {payload.note}" if payload.note else "")
+    change = ChangeEvent(target_id=target.id, source="ci_cd_webhook", detail=detail[:1000])
+    db.add(change)
+    db.flush()
+    db.add(AuditEvent(event_type="change_detected", decision="allow", details=f"CI/CD deploy webhook received for {target.name}: {detail[:400]}"))
+    db.commit()
+    db.refresh(change)
+
+    control = get_safety_control(db)
+    already_running = db.scalar(select(func.count()).select_from(Scan).where(Scan.status.in_(["queued", "running", "cancel_requested"]))) or 0
+    if control.kill_switch_engaged or already_running or target.status != "authorized":
+        reason = "kill switch engaged" if control.kill_switch_engaged else "a scan is already running" if already_running else "target is not authorized"
+        db.add(AuditEvent(event_type="auto_scan_skipped", decision="deny", details=f"Deploy-triggered scan for {target.name} skipped: {reason}."))
+        db.commit()
+        return {"change_event_id": change.id, "scan_started": False, "reason": reason}
+
+    try:
+        validate_target_url(target.base_url)
+    except ScopeRejected:
+        return {"change_event_id": change.id, "scan_started": False, "reason": "target origin not allowlisted"}
+    scan = Scan(target_id=target.id, status="queued", trigger="change_detected", started_at=datetime.now(timezone.utc),
+        summary=f"Auto-triggered by deploy event for release '{payload.release or 'unspecified'}'.", cancel_requested=False)
+    db.add(scan)
+    db.flush()
+    change.triggered_scan_id = scan.id
+    db.add(AuditEvent(scan_id=scan.id, event_type="scan_requested", decision="allow", details=f"Deploy-triggered bounded scan queued for {target.name}."))
+    db.commit()
+    db.refresh(scan)
+    background.add_task(run_scan, scan.id, target.id)
+    return {"change_event_id": change.id, "scan_started": True, "scan_id": scan.id}
 
 
 @app.post("/api/scans", status_code=202)

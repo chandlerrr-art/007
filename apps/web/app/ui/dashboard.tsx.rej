@@ -1,0 +1,44 @@
+diff a/apps/web/app/ui/dashboard.tsx b/apps/web/app/ui/dashboard.tsx	(rejected hunks)
+@@ -50,6 +52,15 @@ export default function Dashboard() {
+     } catch (err) { setError(err instanceof Error ? err.message : "Could not cancel scan."); }
+   }
+ 
++  async function toggleKillSwitch() {
++    const engaging = !data.safety.kill_switch_engaged;
++    try {
++      const response = await fetch(`${API}/api/safety/kill-switch`, { method: "POST", headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ engaged: engaging, reason: engaging ? "Manually halted from the dashboard." : "" }) });
++      if (!response.ok) throw new Error("Could not update the kill switch.");
++    } catch (err) { setError(err instanceof Error ? err.message : "Could not update the kill switch."); }
++  }
++
+   return <main className="shell">
+     <aside className="sidebar">
+       <a className="brand" href="#overview"><span className="brand-mark">S</span><span>Sentinel<span className="brand-light">Flow</span></span></a>
+@@ -58,11 +69,11 @@ export default function Dashboard() {
+       <a className="nav-item" href="#scans"><span>◉</span> Scans <span className="nav-count">{data.summary.active_scans}</span></a>
+       <a className="nav-item" href="#findings"><span>⚑</span> Findings</a>
+       <a className="nav-item" href="#targets"><span>◎</span> Targets</a>
+-      <div className="sidebar-bottom"><div className="safety-chip"><span className="pulse"/> SAFETY ENGINE <b>READY</b></div><div className="user-row"><div className="avatar">SF</div><div><strong>Security team</strong><small>Local workspace</small></div><span className="dots">•••</span></div></div>
++      <div className="sidebar-bottom"><div className="safety-chip"><span className="pulse"/> SAFETY ENGINE <b>{data.safety.kill_switch_engaged ? "HALTED" : "READY"}</b></div><div className="user-row"><div className="avatar">SF</div><div><strong>Security team</strong><small>Local workspace</small></div><span className="dots">•••</span></div></div>
+     </aside>
+ 
+     <section className="content" id="overview">
+-      <header className="topbar"><div className="breadcrumbs">Workspace <span>/</span> <b>Overview</b></div><div className="top-actions"><span className="env-pill"><i/> LOCAL DEMO</span><button className="icon-button" aria-label="Notifications">♧</button><div className="avatar small">SF</div></div></header>
++      <header className="topbar"><div className="breadcrumbs">Workspace <span>/</span> <b>Overview</b></div><div className="top-actions"><span className="env-pill"><i/> LOCAL DEMO</span><button className="cancel-button" onClick={toggleKillSwitch} title="Phase 0 kill switch: halts every agent instantly">{data.safety.kill_switch_engaged ? "Clear kill switch" : "Kill switch"}</button><button className="icon-button" aria-label="Notifications">♧</button><div className="avatar small">SF</div></div></header>
+       <div className="page-wrap">
+         <div className="welcome"><div><div className="eyebrow">LOCAL WORKSPACE <span className="live-dot"/> SYSTEM STATUS</div><h1>Security overview</h1><p>Track authorized scan activity and application risk across your targets.</p></div><button className="primary-button" onClick={startScan} disabled={busy || !data.targets.length} title="Runs the bounded local demo access-control check"><span>＋</span> {busy ? "Starting…" : "New scan"}</button></div>
+         {error && <div className="alert">{error}</div>}
+@@ -91,7 +102,11 @@ export default function Dashboard() {
+           <section className="card" id="scans"><div className="card-head"><div><h2>Recent scan activity</h2><p>Latest runs across your authorized targets</p></div><a href="#scans" className="text-link">Scan history <span>→</span></a></div><div className="scan-list">{data.scans.map((scan) => <div className="scan-row" key={scan.id}><span className={`scan-icon ${scan.status}`}>⌕</span><div className="scan-info"><b>{scan.target}</b><span>{scan.trigger} scan · {new Date(scan.started_at).toLocaleString()}</span></div><span className={`scan-state ${scan.status}`}>{scan.status}</span>{["queued", "running", "cancel_requested"].includes(scan.status) && <button className="cancel-button" onClick={() => cancelScan(scan.id)}>Stop</button>}<span className="scan-summary">{scan.summary}{scan.status === "completed" && <> · <a href={`${API}/api/scans/${scan.id}/report`} target="_blank" rel="noreferrer">Report</a></>}</span></div>)}{!data.scans.length && <div className="empty scan-empty">{loaded ? "No scan activity yet." : "Loading scan activity…"}</div>}</div></section>
+           <section className="card targets-card" id="targets"><div className="card-head"><div><h2>Authorized targets</h2><p>In-scope applications</p></div><a href="#targets" className="text-link">Manage <span>→</span></a></div><div className="target-list">{data.targets.map((target) => <div className="target-row" key={target.id}><div className="target-icon">{target.name.slice(0, 1)}</div><div className="target-info"><b>{target.name}</b><span>{target.base_url}</span></div><span className="authorized"><i/>{target.status}</span></div>)}{!data.targets.length && <div className="empty">{loaded ? "No targets configured." : "Loading targets…"}</div>}</div><div className="scope-note"><span>ⓘ</span><div><b>Scope is enforced by the backend</b><p>Only explicitly authorized targets can be scanned.</p></div></div></section>
+         </div>
+-        <footer><span>007 <b>·</b> Local demo workspace</span><span><i className="live-dot"/> All systems operational</span></footer>
++
++        <div className="lower-grid">
++          <section className="card" id="changes"><div className="card-head"><div><h2>Change events</h2><p>Phase 1 detection: deploys and traffic diffs that can start a scan</p></div></div><div className="scan-list">{data.changes.map((change) => <div className="scan-row" key={change.id}><span className="scan-icon completed">⚡</span><div className="scan-info"><b>{change.target}</b><span>{change.source.replaceAll("_", " ")} · {new Date(change.created_at).toLocaleString()}</span></div><span className="scan-summary">{change.detail}</span></div>)}{!data.changes.length && <div className="empty scan-empty">{loaded ? "No change events yet. A deploy webhook or a traffic diff will appear here." : "Loading change events…"}</div>}</div></section>
++        </div>
++        <footer><span>007 <b>·</b> Local demo workspace</span><span><i className="live-dot"/> {data.safety.kill_switch_engaged ? "Kill switch engaged — no new scans will start" : "All systems operational"}</span></footer>
+       </div>
+     </section>
+   </main>;

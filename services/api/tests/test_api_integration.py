@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -53,6 +54,36 @@ class ApiIntegrationTests(unittest.TestCase):
         self.assertEqual(imported.status_code, 200)
         self.assertEqual(imported.json()["inserted"], 1)
         self.assertNotIn("do-not-store", imported.text)
+
+    @patch("app.main.run_scan")
+    def test_deploy_webhook_records_change_event_and_autostarts_scan(self, mock_run_scan) -> None:
+        target_id = self.client.post("/api/targets", json={"name": "Local demo", "base_url": "http://demo-app:8080", "environment": "local-demo"}).json()["id"]
+        response = self.client.post("/api/webhooks/deploy", json={"target_id": target_id, "release": "v1.2.3"})
+        self.assertEqual(response.status_code, 202)
+        mock_run_scan.assert_called_once()
+        body = response.json()
+        self.assertTrue(body["scan_started"])
+        self.assertIn("scan_id", body)
+
+        changes = self.client.get("/api/changes").json()
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["source"], "ci_cd_webhook")
+        self.assertEqual(changes[0]["triggered_scan_id"], body["scan_id"])
+
+    def test_kill_switch_blocks_future_scans_until_cleared(self) -> None:
+        target_id = self.client.post("/api/targets", json={"name": "Local demo", "base_url": "http://demo-app:8080", "environment": "local-demo"}).json()["id"]
+
+        engaged = self.client.post("/api/safety/kill-switch", json={"engaged": True, "reason": "incident drill"})
+        self.assertEqual(engaged.status_code, 200)
+        self.assertTrue(self.client.get("/api/safety/status").json()["kill_switch_engaged"])
+
+        webhook = self.client.post("/api/webhooks/deploy", json={"target_id": target_id, "release": "v2.0.0"})
+        self.assertEqual(webhook.status_code, 202)
+        self.assertFalse(webhook.json()["scan_started"])
+        self.assertEqual(webhook.json()["reason"], "kill switch engaged")
+
+        cleared = self.client.post("/api/safety/kill-switch", json={"engaged": False, "reason": ""})
+        self.assertFalse(cleared.json()["kill_switch_engaged"])
 
 
 if __name__ == "__main__":

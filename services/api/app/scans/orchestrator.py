@@ -7,8 +7,16 @@ import httpx
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import AuditEvent, Endpoint, Evidence, Finding, InventorySnapshot, Scan, ScanStage, Target
-from app.safety.policy import ScopeRejected, assert_request_scope, validate_target_url
+from app.models import AuditEvent, ChangeEvent, Endpoint, Evidence, Finding, InventorySnapshot, Scan, ScanStage, Target
+from app.safety.policy import (
+    KillSwitchEngaged,
+    RateLimited,
+    ScopeRejected,
+    assert_kill_switch_clear,
+    assert_rate_limit,
+    assert_request_scope,
+    validate_target_url,
+)
 
 REQUEST_TIMEOUT_SECONDS = 3.0
 REQUEST_BUDGET = 4
@@ -55,8 +63,13 @@ def _bounded_get(db, scan_id: int, client: httpx.Client, target: Target, url: st
     except ScopeRejected as exc:
         _audit(db, scan_id, "outbound_request", "deny", f"GET {url.split('?', 1)[0]} rejected by target scope policy: {exc}")
         raise
-    counter[0] += 1
     path = url.split(target.base_url.rstrip("/"), 1)[-1].split("?", 1)[0]
+    try:
+        assert_rate_limit(target, path)
+    except RateLimited as exc:
+        _audit(db, scan_id, "outbound_request", "deny", f"GET {path} rejected by the per-endpoint rate limiter: {exc}")
+        raise
+    counter[0] += 1
     _audit(db, scan_id, "outbound_request", "allow", f"GET {path}; request {counter[0]}/{REQUEST_BUDGET}; timeout {REQUEST_TIMEOUT_SECONDS}s.")
     try:
         response = client.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=False)
@@ -158,6 +171,9 @@ def _run_scan(scan_id: int, target_id: int, retest_finding_id: int | None = None
             try:
                 if _cancelled(db, scan.id):
                     raise RuntimeError(_SCAN_CANCELLED)
+                # Phase 0.2 kill switch: checked before scope validation so a halted engine
+                # never even evaluates whether the target would otherwise be in scope.
+                assert_kill_switch_clear(db)
                 # The target was allowlist-checked at registration and is checked again before any request.
                 validate_target_url(target.base_url)
                 if target.status != "authorized":
@@ -185,6 +201,13 @@ def _run_scan(scan_id: int, target_id: int, retest_finding_id: int | None = None
             db.commit()
             _finish_stage(db, inventory_stage, "completed")
             _audit(db, scan.id, "inventory_compared", "allow", f"Endpoint snapshot recorded: {len(inventory_keys)} routes; {len(added)} added and {len(removed)} removed since the prior snapshot.")
+            if previous and (added or removed):
+                # Phase 1.2 traffic-diff watcher: surface the delta as a change event so the
+                # dashboard's change feed and future auto-triggered scans can react to it.
+                db.add(ChangeEvent(target_id=target.id, source="traffic_diff",
+                    detail=f"{len(added)} endpoint(s) added, {len(removed)} removed since the last snapshot.",
+                    triggered_scan_id=scan.id))
+                db.commit()
             endpoints = db.execute(select(Endpoint).where(Endpoint.target_id == target.id, Endpoint.path == "/api/v1/bookings/{booking_id}")).scalars().first()
 
             if _cancelled(db, scan.id):
@@ -203,8 +226,13 @@ def _run_scan(scan_id: int, target_id: int, retest_finding_id: int | None = None
         except Exception as exc:
             scan = db.get(Scan, scan_id)
             if scan:
-                scan.status = "cancelled" if str(exc) == _SCAN_CANCELLED else "failed"
+                if str(exc) == _SCAN_CANCELLED:
+                    scan.status = "cancelled"
+                elif isinstance(exc, KillSwitchEngaged):
+                    scan.status = "halted"
+                else:
+                    scan.status = "failed"
                 scan.summary = str(exc)[:500]
                 scan.finished_at = _now()
-                _audit(db, scan.id, "scan_stopped", "cancel" if scan.status == "cancelled" else "deny", scan.summary)
+                _audit(db, scan.id, "scan_stopped", "cancel" if scan.status in ("cancelled", "halted") else "deny", scan.summary)
                 db.commit()
