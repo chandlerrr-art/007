@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import AuditEvent, ChangeEvent, Endpoint, Evidence, Finding, InventorySnapshot, Scan, ScanStage, Target
-from app.safety.policy import ScopeRejected, get_safety_control, supports_demo_executor, validate_target_url
+from app.safety.policy import ScopeRejected, get_safety_control, redact_operational_text, supports_demo_executor, validate_target_url
 from app.scans.orchestrator import run_scan
 
 app = FastAPI(title="007 API", version="0.1.0", description="Local-first authorized security testing platform")
@@ -42,7 +42,8 @@ class ScanCreate(BaseModel):
 
 class DeployWebhook(BaseModel):
     target_id: int = Field(gt=0)
-    release: str = Field(default="", max_length=200)
+    release: str = Field(default="", max_length=200, pattern=r"^[A-Za-z0-9._+/-]*$")
+    # Retained for caller compatibility; free-form notes are intentionally not persisted.
     note: str = Field(default="", max_length=500)
 
 
@@ -304,10 +305,10 @@ def set_kill_switch(payload: KillSwitchUpdate, db: Session = Depends(get_db)) ->
     """
     control = get_safety_control(db)
     control.kill_switch_engaged = payload.engaged
-    control.reason = payload.reason
+    control.reason = redact_operational_text(payload.reason)
     control.updated_at = datetime.now(timezone.utc)
     db.add(AuditEvent(event_type="kill_switch_toggled", decision="allow" if not payload.engaged else "deny",
-        details=f"Kill switch {'engaged' if payload.engaged else 'cleared'}: {payload.reason or 'no reason given'}."))
+        details=f"Kill switch {'engaged' if payload.engaged else 'cleared'}: {control.reason or 'no reason given'}."))
     db.commit()
     return {"kill_switch_engaged": control.kill_switch_engaged, "reason": control.reason,
             "updated_at": control.updated_at.isoformat() if control.updated_at else None}
@@ -334,7 +335,7 @@ def deploy_webhook(payload: DeployWebhook, background: BackgroundTasks, db: Sess
     target = db.get(Target, payload.target_id)
     if not target:
         raise HTTPException(status_code=404, detail="Target not found.")
-    detail = f"Deploy event for release '{payload.release or 'unspecified'}'." + (f" {payload.note}" if payload.note else "")
+    detail = f"Deploy event for release '{payload.release or 'unspecified'}'."
     change = ChangeEvent(target_id=target.id, source="ci_cd_webhook", detail=detail[:1000])
     db.add(change)
     db.flush()
@@ -353,7 +354,13 @@ def deploy_webhook(payload: DeployWebhook, background: BackgroundTasks, db: Sess
     try:
         validate_target_url(target.base_url)
     except ScopeRejected:
+        db.add(AuditEvent(event_type="auto_scan_skipped", decision="deny", details=f"Deploy-triggered scan for target {target.id} skipped: origin not allowlisted."))
+        db.commit()
         return {"change_event_id": change.id, "scan_started": False, "reason": "target origin not allowlisted"}
+    if not supports_demo_executor(target):
+        db.add(AuditEvent(event_type="auto_scan_skipped", decision="deny", details=f"Deploy-triggered scan for target {target.id} skipped: no active executor supports this target."))
+        db.commit()
+        return {"change_event_id": change.id, "scan_started": False, "reason": "no active executor supports this target"}
     scan = Scan(target_id=target.id, status="queued", trigger="change_detected", started_at=datetime.now(timezone.utc),
         summary=f"Auto-triggered by deploy event for release '{payload.release or 'unspecified'}'.", cancel_requested=False)
     db.add(scan)
@@ -368,6 +375,11 @@ def deploy_webhook(payload: DeployWebhook, background: BackgroundTasks, db: Sess
 
 @app.post("/api/scans", status_code=202, response_model=ScanAcceptedResponse)
 def start_scan(payload: ScanCreate, background: BackgroundTasks, db: Session = Depends(get_db)) -> dict:
+    control = get_safety_control(db)
+    if control.kill_switch_engaged:
+        db.add(AuditEvent(event_type="scan_request_denied", decision="deny", details="Manual scan request blocked because the kill switch is engaged."))
+        db.commit()
+        raise HTTPException(status_code=409, detail="The safety kill switch is engaged.")
     target_id = payload.target_id
     if db.scalar(select(func.count()).select_from(Scan).where(Scan.status.in_(["queued", "running", "cancel_requested"]))) or 0:
         raise HTTPException(status_code=409, detail="A scan is already queued or running. Concurrency is limited to one scan.")
@@ -380,6 +392,8 @@ def start_scan(payload: ScanCreate, background: BackgroundTasks, db: Session = D
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if target.status != "authorized":
         raise HTTPException(status_code=403, detail="Target is not authorized.")
+    if not supports_demo_executor(target):
+        raise HTTPException(status_code=422, detail="The available executor is limited to the local synthetic demo target.")
     scan = Scan(target_id=target.id, status="queued", trigger="manual", started_at=datetime.now(timezone.utc), summary="Waiting to run.", cancel_requested=False)
     db.add(scan)
     db.flush()
@@ -395,7 +409,7 @@ def cancel_scan(scan_id: int, db: Session = Depends(get_db)) -> dict:
     scan = db.get(Scan, scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found.")
-    if scan.status in {"completed", "failed", "cancelled"}:
+    if scan.status in {"completed", "failed", "cancelled", "halted"}:
         return {"id": scan.id, "status": scan.status, "message": "Scan already finished."}
     scan.cancel_requested = True
     scan.status = "cancel_requested"
@@ -434,15 +448,24 @@ def scan_report(scan_id: int, db: Session = Depends(get_db)) -> dict:
 
 @app.post("/api/findings/{finding_id}/retest", status_code=202, response_model=RetestAcceptedResponse)
 def retest_finding(finding_id: int, background: BackgroundTasks, db: Session = Depends(get_db)) -> dict:
+    control = get_safety_control(db)
+    if control.kill_switch_engaged:
+        db.add(AuditEvent(event_type="retest_request_denied", decision="deny", details="Retest request blocked because the kill switch is engaged."))
+        db.commit()
+        raise HTTPException(status_code=409, detail="The safety kill switch is engaged.")
     if db.scalar(select(func.count()).select_from(Scan).where(Scan.status.in_(["queued", "running", "cancel_requested"]))) or 0:
         raise HTTPException(status_code=409, detail="A scan is already queued or running. Concurrency is limited to one scan.")
     finding = db.get(Finding, finding_id)
     if not finding:
         raise HTTPException(status_code=404, detail="Finding not found.")
+    if finding.category != "access_control" or not finding.verified:
+        raise HTTPException(status_code=422, detail="Only verified access-control findings have a supported retest executor.")
     original_scan = db.get(Scan, finding.scan_id)
     target = db.get(Target, original_scan.target_id) if original_scan else None
     if not target:
         raise HTTPException(status_code=404, detail="Finding target not found.")
+    if target.status != "authorized" or not supports_demo_executor(target):
+        raise HTTPException(status_code=422, detail="Retesting is limited to an authorized local synthetic demo target.")
     try:
         validate_target_url(target.base_url)
     except ScopeRejected as exc:
