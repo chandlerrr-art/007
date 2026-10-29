@@ -2,6 +2,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 
 from app.models import SafetyControl, Target
@@ -78,6 +79,14 @@ def validate_target_url(url: str) -> str:
     return target_origin
 
 
+def supports_demo_executor(target: Target) -> bool:
+    """Only the deliberately vulnerable, in-network fixture supports active checks."""
+    try:
+        return target.environment == "local-demo" and validate_target_url(target.base_url) == "http://demo-app:8080"
+    except ScopeRejected:
+        return False
+
+
 def assert_request_scope(target: Target, request_url: str) -> None:
     """Revalidate target configuration and each outgoing request at execution time."""
     base_origin = validate_target_url(target.base_url)
@@ -95,11 +104,16 @@ def assert_rate_limit(target: Target, path: str) -> None:
 
 def get_safety_control(db) -> SafetyControl:
     """Fetch (or lazily create) the single safety-control row holding the kill switch."""
-    control = db.execute(select(SafetyControl).order_by(SafetyControl.id).limit(1)).scalars().first()
+    control = db.get(SafetyControl, 1)
     if control is None:
-        control = SafetyControl(kill_switch_engaged=False, reason="")
+        control = SafetyControl(id=1, kill_switch_engaged=False, reason="")
         db.add(control)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # Another API request created the singleton row at the same time.
+            db.rollback()
+            control = db.get(SafetyControl, 1)
         db.refresh(control)
     return control
 

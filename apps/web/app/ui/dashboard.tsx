@@ -68,7 +68,7 @@ export default function Dashboard() {
     setError("");
     setNotice("");
     try {
-      const response = await fetch(`${API}/api/targets`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: targetName, base_url: targetUrl, environment: targetEnvironment, scope_note: "Registered from SentinelFlow dashboard." }) });
+      const response = await fetch(`${API}/api/targets`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: targetName, base_url: targetUrl, environment: targetEnvironment, scope_note: "Registered from 007 dashboard." }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.detail ?? `API returned ${response.status}`);
       await refreshDashboard();
@@ -102,7 +102,7 @@ export default function Dashboard() {
 
   return <main className="shell">
     <aside className="sidebar">
-      <a className="brand" href="#overview"><span className="brand-mark">S</span><span>Sentinel<span className="brand-light">Flow</span></span></a>
+      <a className="brand" href="#overview"><span className="brand-mark">0</span><span>007</span></a>
       <div className="nav-label">WORKSPACE</div>
       <a className="nav-item active" href="#overview"><span>◫</span> Overview</a>
       <a className="nav-item" href="#scans"><span>◉</span> Scans <span className="nav-count">{data.summary.active_scans}</span></a>
