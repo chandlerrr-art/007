@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.models import SafetyControl, Target
 from app.settings import settings
+from app.safety.credentials import scrub_known_secrets
 
 
 class ScopeRejected(ValueError):
@@ -24,6 +25,7 @@ class RateLimited(RuntimeError):
 
 def redact_operational_text(value: str) -> str:
     """Remove common secrets and direct identifiers before retaining operational notes."""
+    value = scrub_known_secrets(value)
     value = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "Bearer [REDACTED]", value)
     value = re.sub(r"(?i)\b(password|passwd|token|secret|api[_-]?key|authorization|cookie)\s*[:=]\s*[^\s,;]+", r"\1=[REDACTED]", value)
     value = re.sub(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b", "[JWT REDACTED]", value)
@@ -82,8 +84,15 @@ def origin(url: str) -> str:
     return f"{parsed.scheme.lower()}://{parsed.hostname.lower()}{suffix}"
 
 
+def allowed_staging_origins() -> set[str]:
+    raw = getattr(settings, "allowed_staging_origins", "")
+    return {origin(item.strip()) for item in raw.split(",") if item.strip()}
+
+
 def allowed_origins() -> set[str]:
-    return {origin(item.strip()) for item in settings.allowed_target_origins.split(",") if item.strip()}
+    origins = {origin(item.strip()) for item in settings.allowed_target_origins.split(",") if item.strip()}
+    origins.update(allowed_staging_origins())
+    return origins
 
 
 def validate_target_url(url: str) -> str:
@@ -99,6 +108,17 @@ def supports_demo_executor(target: Target) -> bool:
         parsed = urlsplit(target.base_url)
         return (target.environment == "local-demo" and parsed.path in {"", "/"}
                 and validate_target_url(target.base_url) == "http://demo-app:8080")
+    except ValueError:
+        return False
+
+
+def supports_staging_executor(target: Target) -> bool:
+    """Check if target is an authorized staging target matching allowlist."""
+    try:
+        parsed = urlsplit(target.base_url)
+        if target.environment != "staging" or parsed.path not in {"", "/"}:
+            return False
+        return validate_target_url(target.base_url) in allowed_origins()
     except ValueError:
         return False
 

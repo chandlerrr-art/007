@@ -23,11 +23,17 @@ class MigrationTests(unittest.TestCase):
                 try:
                     inspector = inspect(engine)
                     tables = set(inspector.get_table_names())
-                    self.assertTrue({"targets", "scans", "scan_stages", "endpoints", "findings", "evidence", "audit_events", "inventory_snapshots", "change_events", "safety_controls"}.issubset(tables))
+                    expected_tables = {
+                        "targets", "scans", "scan_stages", "endpoints", "findings",
+                        "evidence", "audit_events", "inventory_snapshots", "change_events",
+                        "safety_controls", "test_credentials", "test_executions",
+                        "endpoint_parameters", "endpoint_role_observations", "traffic_log_entries",
+                    }
+                    self.assertTrue(expected_tables.issubset(tables))
                     inventory_type = str(next(column["type"] for column in inspector.get_columns("inventory_snapshots") if column["name"] == "inventory_json")).upper()
                     self.assertIn("TEXT", inventory_type)
                     with engine.connect() as connection:
-                        self.assertEqual(connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), "0004_inventory_text")
+                        self.assertEqual(connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), "0006_evidence_backed_inventory")
                 finally:
                     engine.dispose()
         finally:

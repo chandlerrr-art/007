@@ -18,6 +18,7 @@ from app.safety.policy import (
     supports_demo_executor,
     validate_target_url,
 )
+from app.scans.registry import executor_registry
 
 REQUEST_TIMEOUT_SECONDS = 3.0
 REQUEST_BUDGET = 4
@@ -206,16 +207,21 @@ def _run_scan(scan_id: int, target_id: int, retest_finding_id: int | None = None
             scan.status = "running"
             db.commit()
             scope_stage = _stage(db, scan.id, "scope_validation")
+            executor = None
             try:
                 # Phase 0.2 kill switch: checked before scope validation so a halted engine
                 # never even evaluates whether the target would otherwise be in scope.
                 assert_kill_switch_clear(db)
                 # The target was allowlist-checked at registration and is checked again before any request.
                 validate_target_url(target.base_url)
-                if target.status != "authorized":
+                if target.status not in {"authorized", "approved"}:
                     raise ScopeRejected("Target is not marked authorized.")
-                if not supports_demo_executor(target):
-                    raise ScopeRejected("The available executor is limited to the configured local synthetic demo fixture.")
+                if supports_demo_executor(target):
+                    executor = None
+                else:
+                    executor = executor_registry.get_for_target(target)
+                    if not executor:
+                        raise ScopeRejected("The available executor is limited to the configured local synthetic demo fixture.")
                 _finish_stage(db, scope_stage, "completed")
                 _audit(db, scan.id, "scope_validated", "allow", f"Authorized target {target.name}; origin allowlisted.")
             except Exception as exc:
@@ -225,11 +231,27 @@ def _run_scan(scan_id: int, target_id: int, retest_finding_id: int | None = None
             inventory_stage = _stage(db, scan.id, "inventory")
             try:
                 inventory = db.execute(select(Endpoint).where(Endpoint.target_id == target.id).order_by(Endpoint.method, Endpoint.path)).scalars().all()
-                if not any(endpoint.path == "/api/v1/bookings/{booking_id}" for endpoint in inventory):
-                    endpoint = Endpoint(target_id=target.id, method="GET", path="/api/v1/bookings/{booking_id}", classification="active", sensitivity="sensitive", last_seen=_now(), source="demo_fixture")
-                    db.add(endpoint)
-                    db.flush()
-                    inventory.append(endpoint)
+                if supports_demo_executor(target):
+                    if not any(endpoint.path == "/api/v1/bookings/{booking_id}" for endpoint in inventory):
+                        endpoint = Endpoint(
+                            target_id=target.id,
+                            method="GET",
+                            path="/api/v1/bookings/{booking_id}",
+                            classification="active",
+                            sensitivity="sensitive",
+                            last_seen=_now(),
+                            source="demo_fixture",
+                            business_flow="book",
+                            api_version="v1",
+                            owner="Booking & Orders Team",
+                            likely_owner="Booking & Orders Team",
+                            auth_required=True,
+                            auth_reachability="authenticated_only",
+                            recommended_action="keep_active",
+                        )
+                        db.add(endpoint)
+                        db.flush()
+                        inventory.append(endpoint)
                 inventory_keys = sorted({f"{endpoint.method} {endpoint.path}" for endpoint in inventory})
                 previous_snapshot = db.execute(select(InventorySnapshot).where(InventorySnapshot.target_id == target.id).order_by(InventorySnapshot.id.desc()).limit(1)).scalars().first()
                 previous_keys = set(json.loads(previous_snapshot.inventory_json)) if previous_snapshot else set()
@@ -244,13 +266,20 @@ def _run_scan(scan_id: int, target_id: int, retest_finding_id: int | None = None
                         detail=f"{len(added)} endpoint(s) added, {len(removed)} removed since the last snapshot.",
                         triggered_scan_id=scan.id))
                     db.commit()
+
+                # Phase 1: Compute real Active / Zombie / Shadow classification from traffic window
+                from app.inventory.service import classify_endpoints
+                classify_endpoints(db, target.id, window_days=90)
             except Exception as exc:
                 _finish_stage(db, inventory_stage, "failed", str(exc))
                 raise
-            endpoints = db.execute(select(Endpoint).where(Endpoint.target_id == target.id, Endpoint.path == "/api/v1/bookings/{booking_id}")).scalars().first()
 
             _ensure_scan_active(db, scan.id)
-            vulnerable, summary = _run_access_control_check(db, scan, target, endpoints, retest_finding_id)
+            if executor:
+                vulnerable, summary = executor.run(db, scan, target, retest_finding_id)
+            else:
+                endpoints = db.execute(select(Endpoint).where(Endpoint.target_id == target.id, Endpoint.path == "/api/v1/bookings/{booking_id}")).scalars().first()
+                vulnerable, summary = _run_access_control_check(db, scan, target, endpoints, retest_finding_id)
 
             if retest_finding_id is not None:
                 previous = db.get(Finding, retest_finding_id)
