@@ -37,6 +37,7 @@
 
 6. Open <http://localhost:3000>. Click **New scan** to run the bounded check against the seeded localhost demo target. The API health endpoint is <http://localhost:8000/api/health> and its OpenAPI page is <http://localhost:8000/docs>.
 
+
 The demo app is deliberately vulnerable only to a synthetic cross-agency booking read. The current executor refuses to run against anything except `http://demo-app:8080` with environment `local-demo`, even if another origin is added to the target allowlist. It sends at most four requests, uses a three-second timeout, disables redirects and environment proxies, and stores no response body or credentials. Reports are available from completed scan activity and at `/api/scans/{scan_id}/report`.
 
 To demonstrate remediation, change `DEMO_FIX_IDOR=false` to `DEMO_FIX_IDOR=true` in `.env`, then recreate the fixture with `docker compose up -d --build demo-app`. Start another scan, or submit `POST /api/findings/{finding_id}/retest` in the API docs. A successful retest marks the previous finding resolved.
