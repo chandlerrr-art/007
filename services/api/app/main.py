@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import datetime, timezone
+from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import AuditEvent, ChangeEvent, Endpoint, Evidence, Finding, InventorySnapshot, Scan, ScanStage, Target
-from app.safety.policy import ScopeRejected, get_safety_control, validate_target_url
+from app.safety.policy import ScopeRejected, get_safety_control, supports_demo_executor, validate_target_url
 from app.scans.orchestrator import run_scan
 
 app = FastAPI(title="007 API", version="0.1.0", description="Local-first authorized security testing platform")
@@ -50,13 +51,141 @@ class KillSwitchUpdate(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
-@app.get("/api/health")
+class HealthResponse(BaseModel):
+    status: Literal["healthy"]
+    database: Literal["connected"]
+
+
+class TargetResponse(BaseModel):
+    id: int
+    name: str
+    base_url: str
+    environment: str
+    status: str
+    scope_note: str = ""
+
+
+class DashboardSummary(BaseModel):
+    active_scans: int
+    verified_findings: int
+    endpoints: int
+    targets: int
+
+
+class DashboardFinding(BaseModel):
+    id: int
+    title: str
+    category: str
+    severity: str
+    confidence: str
+    verified: bool
+    status: str
+    path: str
+    target: str
+
+
+class DashboardScan(BaseModel):
+    id: int
+    target: str
+    status: str
+    trigger: str
+    started_at: datetime
+    summary: str
+
+
+class DashboardChange(BaseModel):
+    id: int
+    target: str
+    source: str
+    detail: str
+    created_at: datetime
+
+
+class DashboardResponse(BaseModel):
+    summary: DashboardSummary
+    severity: dict[str, int]
+    targets: list[TargetResponse]
+    findings: list[DashboardFinding]
+    scans: list[DashboardScan]
+    changes: list[DashboardChange]
+    safety: dict[str, str | bool]
+    recent_audit_events: int
+
+
+class SafetyStatusResponse(BaseModel):
+    kill_switch_engaged: bool
+    reason: str
+    updated_at: datetime | None
+
+
+class ScanAcceptedResponse(BaseModel):
+    id: int
+    target_id: int
+    status: Literal["queued"]
+
+
+class CancelResponse(BaseModel):
+    id: int
+    status: str
+    message: str | None = None
+
+
+class StageReport(BaseModel):
+    name: str
+    status: str
+    error: str | None
+
+
+class FindingReport(BaseModel):
+    id: int
+    title: str
+    category: str
+    severity: str
+    confidence: str
+    business_impact: str
+    status: str
+    verified: bool
+    affected_endpoint: str
+    reproduction_steps: list[str]
+    evidence: list[dict[str, str | bool]]
+    remediation: str
+    owner: str
+
+
+class ScanReportResponse(BaseModel):
+    scan: dict[str, int | str | None]
+    target: dict[str, str]
+    stages: list[StageReport]
+    inventory_snapshots: list[dict[str, object]]
+    audit_events: list[dict[str, object]]
+    findings: list[FindingReport]
+
+
+class RetestAcceptedResponse(ScanAcceptedResponse):
+    retests_finding: int
+
+
+class DeployResponse(BaseModel):
+    change_event_id: int
+    scan_started: bool
+    reason: str | None = None
+    scan_id: int | None = None
+
+
+class HARImportResponse(BaseModel):
+    target_id: int
+    discovered: int
+    inserted: int
+    note: str
+
+
+@app.get("/api/health", response_model=HealthResponse)
 def health(db: Session = Depends(get_db)) -> dict[str, str]:
     db.execute(text("SELECT 1"))
     return {"status": "healthy", "database": "connected"}
 
 
-@app.get("/api/dashboard")
+@app.get("/api/dashboard", response_model=DashboardResponse)
 def dashboard(db: Session = Depends(get_db)) -> dict:
     severity_counts = dict(db.execute(select(Finding.severity, func.count(Finding.id)).where(Finding.status != "resolved").group_by(Finding.severity)).all())
     findings = db.execute(
@@ -92,13 +221,13 @@ def dashboard(db: Session = Depends(get_db)) -> dict:
     }
 
 
-@app.get("/api/targets")
+@app.get("/api/targets", response_model=list[TargetResponse])
 def list_targets(db: Session = Depends(get_db)) -> list[dict]:
     return [{"id": t.id, "name": t.name, "base_url": t.base_url, "environment": t.environment, "status": t.status, "scope_note": t.scope_note}
             for t in db.execute(select(Target).order_by(Target.name)).scalars()]
 
 
-@app.post("/api/targets", status_code=201)
+@app.post("/api/targets", status_code=201, response_model=TargetResponse)
 def create_target(payload: TargetCreate, db: Session = Depends(get_db)) -> dict:
     try:
         validate_target_url(payload.base_url)
@@ -114,7 +243,7 @@ def create_target(payload: TargetCreate, db: Session = Depends(get_db)) -> dict:
     return {"id": target.id, "name": target.name, "base_url": target.base_url, "environment": target.environment, "status": target.status}
 
 
-@app.post("/api/targets/{target_id}/har-import")
+@app.post("/api/targets/{target_id}/har-import", response_model=HARImportResponse)
 def import_har(target_id: int, payload: HARImport, db: Session = Depends(get_db)) -> dict:
     target = db.get(Target, target_id)
     if not target:
@@ -158,14 +287,14 @@ def import_har(target_id: int, payload: HARImport, db: Session = Depends(get_db)
     return {"target_id": target.id, "discovered": len(extracted), "inserted": inserted, "note": "Request headers, cookies, bodies, and query strings were not stored."}
 
 
-@app.get("/api/safety/status")
+@app.get("/api/safety/status", response_model=SafetyStatusResponse)
 def safety_status(db: Session = Depends(get_db)) -> dict:
     control = get_safety_control(db)
     return {"kill_switch_engaged": control.kill_switch_engaged, "reason": control.reason,
             "updated_at": control.updated_at.isoformat() if control.updated_at else None}
 
 
-@app.post("/api/safety/kill-switch")
+@app.post("/api/safety/kill-switch", response_model=SafetyStatusResponse)
 def set_kill_switch(payload: KillSwitchUpdate, db: Session = Depends(get_db)) -> dict:
     """Phase 0.2 kill switch: a single override that halts all agents instantly.
 
@@ -180,7 +309,8 @@ def set_kill_switch(payload: KillSwitchUpdate, db: Session = Depends(get_db)) ->
     db.add(AuditEvent(event_type="kill_switch_toggled", decision="allow" if not payload.engaged else "deny",
         details=f"Kill switch {'engaged' if payload.engaged else 'cleared'}: {payload.reason or 'no reason given'}."))
     db.commit()
-    return {"kill_switch_engaged": control.kill_switch_engaged, "reason": control.reason}
+    return {"kill_switch_engaged": control.kill_switch_engaged, "reason": control.reason,
+            "updated_at": control.updated_at.isoformat() if control.updated_at else None}
 
 
 @app.get("/api/changes")
@@ -193,7 +323,7 @@ def list_changes(db: Session = Depends(get_db)) -> list[dict]:
              "triggered_scan_id": c.triggered_scan_id, "created_at": c.created_at.isoformat()} for c, name in rows]
 
 
-@app.post("/api/webhooks/deploy", status_code=202)
+@app.post("/api/webhooks/deploy", status_code=202, response_model=DeployResponse)
 def deploy_webhook(payload: DeployWebhook, background: BackgroundTasks, db: Session = Depends(get_db)) -> dict:
     """Phase 1.1 CI/CD listener: a webhook receiver for deploy events.
 
@@ -236,7 +366,7 @@ def deploy_webhook(payload: DeployWebhook, background: BackgroundTasks, db: Sess
     return {"change_event_id": change.id, "scan_started": True, "scan_id": scan.id}
 
 
-@app.post("/api/scans", status_code=202)
+@app.post("/api/scans", status_code=202, response_model=ScanAcceptedResponse)
 def start_scan(payload: ScanCreate, background: BackgroundTasks, db: Session = Depends(get_db)) -> dict:
     target_id = payload.target_id
     if db.scalar(select(func.count()).select_from(Scan).where(Scan.status.in_(["queued", "running", "cancel_requested"]))) or 0:
@@ -260,7 +390,7 @@ def start_scan(payload: ScanCreate, background: BackgroundTasks, db: Session = D
     return {"id": scan.id, "target_id": target.id, "status": scan.status}
 
 
-@app.post("/api/scans/{scan_id}/cancel")
+@app.post("/api/scans/{scan_id}/cancel", response_model=CancelResponse)
 def cancel_scan(scan_id: int, db: Session = Depends(get_db)) -> dict:
     scan = db.get(Scan, scan_id)
     if not scan:
@@ -274,7 +404,7 @@ def cancel_scan(scan_id: int, db: Session = Depends(get_db)) -> dict:
     return {"id": scan.id, "status": scan.status}
 
 
-@app.get("/api/scans/{scan_id}/report")
+@app.get("/api/scans/{scan_id}/report", response_model=ScanReportResponse)
 def scan_report(scan_id: int, db: Session = Depends(get_db)) -> dict:
     scan = db.get(Scan, scan_id)
     if not scan:
@@ -302,7 +432,7 @@ def scan_report(scan_id: int, db: Session = Depends(get_db)) -> dict:
             "findings": finding_rows}
 
 
-@app.post("/api/findings/{finding_id}/retest", status_code=202)
+@app.post("/api/findings/{finding_id}/retest", status_code=202, response_model=RetestAcceptedResponse)
 def retest_finding(finding_id: int, background: BackgroundTasks, db: Session = Depends(get_db)) -> dict:
     if db.scalar(select(func.count()).select_from(Scan).where(Scan.status.in_(["queued", "running", "cancel_requested"]))) or 0:
         raise HTTPException(status_code=409, detail="A scan is already queued or running. Concurrency is limited to one scan.")
