@@ -68,12 +68,15 @@ endpoint_rate_limiter = TokenBucket(capacity=3, refill_per_second=0.5)
 
 
 def origin(url: str) -> str:
-    parsed = urlsplit(url)
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ScopeRejected("Target URL is malformed or has an invalid port.") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
         raise ScopeRejected("Target must be an HTTP(S) URL without embedded credentials.")
     if parsed.query or parsed.fragment:
         raise ScopeRejected("Target base URL cannot contain a query or fragment.")
-    port = parsed.port
     default_port = 443 if parsed.scheme == "https" else 80
     suffix = f":{port}" if port and port != default_port else ""
     return f"{parsed.scheme.lower()}://{parsed.hostname.lower()}{suffix}"
@@ -115,7 +118,7 @@ def assert_rate_limit(target: Target, path: str) -> None:
 
 def get_safety_control(db) -> SafetyControl:
     """Fetch (or lazily create) the single safety-control row holding the kill switch."""
-    control = db.get(SafetyControl, 1)
+    control = db.execute(select(SafetyControl).where(SafetyControl.id == 1).execution_options(populate_existing=True)).scalars().first()
     if control is None:
         control = SafetyControl(id=1, kill_switch_engaged=False, reason="")
         db.add(control)

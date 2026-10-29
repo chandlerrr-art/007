@@ -31,8 +31,10 @@ def _now() -> datetime:
 
 
 def _cancelled(db, scan_id: int) -> bool:
-    scan = db.get(Scan, scan_id)
-    return scan is None or scan.cancel_requested
+    # Use a fresh SELECT: the long-lived scan session has expire_on_commit=False and must
+    # observe cancellation written by the API in a separate session.
+    cancelled = db.scalar(select(Scan.cancel_requested).where(Scan.id == scan_id))
+    return cancelled is None or cancelled
 
 
 def _ensure_scan_active(db, scan_id: int) -> None:
