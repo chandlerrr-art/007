@@ -210,7 +210,8 @@ class ScanOrchestrationTests(unittest.TestCase):
             db.add(finding)
             db.flush()
             finding_id = finding.id
-            retest_id = self.add_scan()
+            db.commit()
+        retest_id = self.add_scan()
         self.respond_with([json_response(200), json_response(404), json_response(200)])
         self.run_with_fake_client(retest_id, retest_finding_id=finding_id)
         with self.session_factory() as db:
