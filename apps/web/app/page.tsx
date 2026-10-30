@@ -1,5 +1,5 @@
-import Dashboard from "./ui/dashboard";
+import ExperienceGate from "./ui/experience-gate";
 
 export default function Home() {
-  return <Dashboard />;
+  return <ExperienceGate />;
 }

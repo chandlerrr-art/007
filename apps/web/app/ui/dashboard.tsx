@@ -311,7 +311,7 @@ export default function Dashboard() {
   const pendingTests = data.pending_tests ?? [];
   const hasReviewQueue = pendingFindings.length > 0 || pendingTests.length > 0;
 
-  return <main className="shell">
+  return <main className="shell operations-shell">
     <aside className="sidebar">
       <a className="brand" href="#overview" aria-label="007 dashboard home"><span className="brand-mark">0</span><span>007</span></a>
       <div className="nav-label">WORKSPACE</div>
