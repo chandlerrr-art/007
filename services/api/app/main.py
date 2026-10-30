@@ -5,7 +5,7 @@ from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, text
@@ -69,6 +69,7 @@ from app.scans.orchestrator import run_scan
 from app.scans.registry import executor_registry
 from app.remediation.compliance import target_posture
 from app.remediation.reporting import executive_report, render_html
+from app.reporting import render_executive_report_pdf, render_scan_report_pdf
 from app.remediation.ticketing import TicketingError, create_ticket, sync_ticket
 from app.cicd.gates import evaluate_gate
 from app.cicd.webhooks import WebhookDeliveryError, dispatch_event, dispatch_subscription
@@ -311,31 +312,6 @@ class ScanStatusResponse(BaseModel):
     finished_at: datetime | None
     summary: str
     stages: list[StageReport]
-
-
-class FindingReport(BaseModel):
-    id: int
-    title: str
-    category: str
-    severity: str
-    confidence: str
-    business_impact: str
-    status: str
-    verified: bool
-    affected_endpoint: str
-    reproduction_steps: list[str]
-    evidence: list[dict[str, str | bool]]
-    remediation: str
-    owner: str
-
-
-class ScanReportResponse(BaseModel):
-    scan: dict[str, int | str | None]
-    target: dict[str, str]
-    stages: list[StageReport]
-    inventory_snapshots: list[dict[str, object]]
-    audit_events: list[dict[str, object]]
-    findings: list[FindingReport]
 
 
 class RetestAcceptedResponse(ScanAcceptedResponse):
@@ -1149,8 +1125,12 @@ def scan_status(scan_id: int, db: Session = Depends(get_db)) -> dict:
             "stages": [{"name": stage.name, "status": stage.status, "error": stage.error} for stage in stages]}
 
 
-@app.get("/api/scans/{scan_id}/report", response_model=ScanReportResponse)
-def scan_report(scan_id: int, db: Session = Depends(get_db)) -> dict:
+@app.get(
+    "/api/scans/{scan_id}/report",
+    response_class=Response,
+    responses={200: {"content": {"application/pdf": {"schema": {"type": "string", "format": "binary"}}}}},
+)
+def scan_report(scan_id: int, db: Session = Depends(get_db)) -> Response:
     scan = db.get(Scan, scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found.")
@@ -1178,7 +1158,7 @@ def scan_report(scan_id: int, db: Session = Depends(get_db)) -> dict:
             "remediation": "Enforce strict role-based access control and principle of least privilege.",
             "owner": "Security Reviewer",
         })
-    return {
+    report = {
         "scan": {"id": scan.id, "status": scan.status, "started_at": scan.started_at.isoformat(), "finished_at": scan.finished_at.isoformat() if scan.finished_at else None, "summary": scan.summary},
         "target": {"name": target.name if target else "Unavailable", "base_url": target.base_url if target else ""},
         "stages": [{"name": s.name, "status": s.status, "error": s.error} for s in stages],
@@ -1186,6 +1166,11 @@ def scan_report(scan_id: int, db: Session = Depends(get_db)) -> dict:
         "audit_events": [{"event_type": e.event_type, "decision": e.decision, "details": e.details, "created_at": e.created_at.isoformat()} for e in audit_events],
         "findings": finding_rows,
     }
+    return Response(
+        content=render_scan_report_pdf(report),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="scan-{scan.id}-report.pdf"'},
+    )
 
 
 @app.post("/api/findings/{finding_id}/retest", status_code=202, response_model=RetestAcceptedResponse)
@@ -1543,12 +1528,18 @@ def get_target_compliance(target_id: int, db: Session = Depends(get_db)) -> dict
 
 
 @app.get("/api/targets/{target_id}/reports/executive")
-def get_executive_report(target_id: int, format: Literal["json", "html"] = "json", db: Session = Depends(get_db)):
+def get_executive_report(target_id: int, format: Literal["pdf", "json", "html"] = "pdf", db: Session = Depends(get_db)):
     if db.get(Target, target_id) is None:
         raise HTTPException(status_code=404, detail="Target not found.")
     report = executive_report(db, target_id)
     if format == "html":
         return HTMLResponse(render_html(report), headers={"Content-Disposition": f'attachment; filename="target-{target_id}-executive-report.html"'})
+    if format == "pdf":
+        return Response(
+            content=render_executive_report_pdf(report),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="target-{target_id}-executive-report.pdf"'},
+        )
     return report
 
 

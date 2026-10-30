@@ -229,3 +229,10 @@ services\api\tests\test_vulnerability_engine.py ............             [100%]
 - Added patch listing and task status endpoints for following background patch jobs.
 - Added Redis and Celery worker services to Docker Compose and added `celery[redis]` to API dependencies.
 - Added eager-mode worker tests for dispatch payloads, successful persistence, failure persistence, duplicate-delivery idempotency, queue configuration, and patch-generation failure handling.
+
+## PDF scan reports
+
+- Converted `GET /api/scans/{scan_id}/report` from a JSON response to a downloadable PDF with scan summary, stages, inventory snapshots, audit events, findings, evidence, and remediation details.
+- Made PDF the default for `GET /api/targets/{id}/reports/executive`, retaining explicit JSON and HTML formats.
+- Updated the dashboard action to identify the PDF download and added ReportLab as an API dependency.
+- Verified the PDF response and report rendering in API integration tests; the web production build succeeds.

@@ -41,9 +41,9 @@ Enterprise workspace authentication is disabled by default for this localhost-on
 
 Envelope encryption uses `MASTER_KEK_SECRET` to wrap a fresh AES-256-GCM data key for each protected value. Generate a high-entropy value and store it outside source control (for example in the ignored local `.env`); set the same KEK configuration for both `api` and `worker`. Validate it with `docker compose exec api python -m app.core.encryption --check`. A KMS/HSM integration can implement `KEKProvider` and register it with `configure_kek_provider()` during application bootstrap. Keep prior KEK versions available through a provider keyring while rewrapping stored DEKs. `CREDENTIAL_ENCRYPTION_KEY` is only for reading legacy ciphertext during migration; do not use it for new values.
 
-The backend exposes health and dashboard summaries; target registration and inventory; HAR import; scan start, status, cancellation, and JSON report; finding retest; safety status and kill switch; deploy webhooks; and the change feed. The OpenAPI page lists the request and response schemas.
+The backend exposes health and dashboard summaries; target registration and inventory; HAR import; scan start, status, cancellation, and downloadable PDF reports; finding retest; safety status and kill switch; deploy webhooks; and the change feed. Executive reports are downloadable PDFs by default, with JSON and HTML available through the `format` query parameter. The OpenAPI page lists the request and response schemas.
 
-The demo app is deliberately vulnerable only to a synthetic cross-agency booking read. The current executor refuses to run against anything except `http://demo-app:8080` with environment `local-demo`, even if another origin is added to the target allowlist. It sends at most four requests, uses a three-second timeout, disables redirects and environment proxies, and stores no response body or credentials. Reports are available from completed scan activity and at `/api/scans/{scan_id}/report`; current scan stage states are at `/api/scans/{scan_id}`.
+The demo app is deliberately vulnerable only to a synthetic cross-agency booking read. The current executor refuses to run against anything except `http://demo-app:8080` with environment `local-demo`, even if another origin is added to the target allowlist. It sends at most four requests, uses a three-second timeout, disables redirects and environment proxies, and stores no response body or credentials. PDF reports are available from completed scan activity and at `/api/scans/{scan_id}/report`; current scan stage states are at `/api/scans/{scan_id}`.
 
 To demonstrate remediation, change `DEMO_FIX_IDOR=false` to `DEMO_FIX_IDOR=true` in `.env`, then recreate the fixture with `docker compose up -d --build demo-app`. Start another scan, or submit `POST /api/findings/{finding_id}/retest` in the API docs. A successful retest marks the previous finding resolved.
 
@@ -53,7 +53,7 @@ To reset the local demo database, run `docker compose down -v` and repeat the se
 
 ## Current milestone
 
-Milestones A–D cover the database-backed dashboard, target allowlisting, HAR endpoint import, endpoint snapshot comparison, scan state/stage records, one bounded access-control check against the local synthetic app, deterministic verification, redacted evidence, audit events, a JSON report, and a retest endpoint.
+Milestones A–D cover the database-backed dashboard, target allowlisting, HAR endpoint import, endpoint snapshot comparison, scan state/stage records, one bounded access-control check against the local synthetic app, deterministic verification, redacted evidence, audit events, a PDF report, and a retest endpoint.
 
 Milestone E adds the first two phases of the [phase-wise architecture](#architecture-phase-mapping): a Phase 0 kill switch and per-endpoint rate limiter, and a Phase 1 change-detection path (a CI/CD deploy webhook plus the traffic-diff watcher already implicit in endpoint snapshotting), both surfaced on the dashboard.
 
@@ -77,7 +77,7 @@ This repo is being built out against the phase-wise architecture in the hackatho
 | 3 — Attack planning | Endpoint classifier, business-flow reasoner, prioritization | Not yet implemented |
 | 4 — Specialist executors | One access-control check against the demo fixture | Partially implemented; business-logic, auth/session, injection, and SSRF executors not yet built |
 | 5 — Verification, triage & severity | Deterministic repeat-read verification; findings carry severity/confidence | Partially implemented; no dedup/clustering, no multi-agent debate verifier |
-| 6 — Reporting, human-in-the-loop & retest | JSON report, retest endpoint | Partially implemented; no human-approval queue in the UI |
+| 6 — Reporting, human-in-the-loop & retest | PDF report, retest endpoint | Partially implemented; no human-approval queue in the UI |
 | 7 — Orchestration & control loop | Single-scan orchestrator with staged execution | Partially implemented; no event bus, single scan at a time |
 | 8 — Hardening & demo prep | — | Ongoing as features land |
 

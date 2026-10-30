@@ -41,6 +41,20 @@ class ApiIntegrationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["summary"]["targets"], 0)
 
+    def test_executive_report_defaults_to_pdf_and_preserves_json_format(self) -> None:
+        target_id = self.client.post(
+            "/api/targets",
+            json={"name": "Local demo", "base_url": "http://demo-app:8080", "environment": "local-demo"},
+        ).json()["id"]
+        pdf = self.client.get(f"/api/targets/{target_id}/reports/executive")
+        self.assertEqual(pdf.headers["content-type"], "application/pdf")
+        self.assertTrue(pdf.content.startswith(b"%PDF-"))
+        self.assertIn(f'target-{target_id}-executive-report.pdf', pdf.headers["content-disposition"])
+
+        json_report = self.client.get(f"/api/targets/{target_id}/reports/executive?format=json")
+        self.assertEqual(json_report.status_code, 200)
+        self.assertEqual(json_report.json()["target_id"], target_id)
+
     def test_target_creation_enforces_allowlist_and_har_import_redacts_query(self) -> None:
         rejected = self.client.post("/api/targets", json={"name": "External", "base_url": "https://example.com", "environment": "staging"})
         self.assertEqual(rejected.status_code, 422)
@@ -91,9 +105,27 @@ class ApiIntegrationTests(unittest.TestCase):
         mock_run_scan.assert_called_once()
         scan_id = response.json()["id"]
         self.assertEqual(self.client.get(f"/api/scans/{scan_id}").json()["status"], "queued")
+        with self.session_factory() as db:
+            db.add(Finding(
+                scan_id=scan_id,
+                title="Sample <finding> & details",
+                category="access_control",
+                severity="high",
+                confidence="high",
+                business_impact="Unauthorized access",
+                status="needs_verification",
+                verified=False,
+            ))
+            db.commit()
         report = self.client.get(f"/api/scans/{scan_id}/report")
         self.assertEqual(report.status_code, 200)
-        self.assertEqual(report.json()["findings"], [])
+        self.assertEqual(report.headers["content-type"], "application/pdf")
+        self.assertIn(f'scan-{scan_id}-report.pdf', report.headers["content-disposition"])
+        self.assertTrue(report.content.startswith(b"%PDF-"))
+        self.assertTrue(report.content.rstrip().endswith(b"%%EOF"))
+        schema = self.client.get("/openapi.json").json()
+        report_response = schema["paths"]["/api/scans/{scan_id}/report"]["get"]["responses"]["200"]
+        self.assertIn("application/pdf", report_response["content"])
 
     def test_retest_rejects_findings_without_a_supported_verified_executor(self) -> None:
         target_id = self.client.post("/api/targets", json={"name": "Local demo", "base_url": "http://demo-app:8080", "environment": "local-demo"}).json()["id"]
