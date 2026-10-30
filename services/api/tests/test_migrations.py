@@ -28,12 +28,13 @@ class MigrationTests(unittest.TestCase):
                         "evidence", "audit_events", "inventory_snapshots", "change_events",
                         "safety_controls", "test_credentials", "test_executions",
                         "endpoint_parameters", "endpoint_role_observations", "traffic_log_entries",
+                        "vulnerability_scans", "discovered_vulnerabilities",
                     }
                     self.assertTrue(expected_tables.issubset(tables))
                     inventory_type = str(next(column["type"] for column in inspector.get_columns("inventory_snapshots") if column["name"] == "inventory_json")).upper()
                     self.assertIn("TEXT", inventory_type)
                     with engine.connect() as connection:
-                        self.assertEqual(connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), "0006_evidence_backed_inventory")
+                        self.assertEqual(connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), "0007_vulnerability_engine")
                 finally:
                     engine.dispose()
         finally:

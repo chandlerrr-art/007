@@ -10,10 +10,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.models import (
     AuditEvent,
     ChangeEvent,
+    DiscoveredVulnerability,
     Endpoint,
     EndpointParameter,
     EndpointRoleObservation,
@@ -26,6 +27,7 @@ from app.models import (
     TestAccountCredential,
     TestExecution,
     TrafficLogEntry,
+    VulnerabilityScan,
 )
 from app.inventory.service import (
     classify_endpoints,
@@ -52,6 +54,7 @@ from app.safety.policy import (
 )
 from app.scans.orchestrator import run_scan
 from app.scans.registry import executor_registry
+from app.vulnerability.engine import run_vulnerability_scan
 
 app = FastAPI(title="007 API", version="0.1.0", description="Local-first authorized security testing platform")
 app.add_middleware(
@@ -1129,3 +1132,257 @@ def retest_finding(finding_id: int, background: BackgroundTasks, db: Session = D
     db.refresh(scan)
     background.add_task(run_scan, scan.id, target.id, finding.id)
     return {"id": scan.id, "target_id": target.id, "status": scan.status, "retests_finding": finding.id}
+
+
+# ==============================================================================
+# Phase 2: Targeted Vulnerability Scanning, Authorization Fuzzing & Business Flow
+# ==============================================================================
+
+class Phase2ScanRequest(BaseModel):
+    profile: Literal["quick", "deep", "auth_matrix_only"] = "quick"
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+class Phase2ScanCreateResponse(BaseModel):
+    id: int
+    target_id: int
+    status: str
+    profile: str
+    started_at: str | None = None
+    message: str
+
+
+class Phase2ScanStatusResponse(BaseModel):
+    id: int
+    target_id: int
+    status: str
+    profile: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    duration_seconds: float | None = None
+    progress_percentage: int
+    findings_count: int
+    findings_by_severity: dict[str, int]
+    metrics: dict[str, Any]
+    config_snapshot: dict[str, Any]
+
+
+class DiscoveredVulnerabilityResponse(BaseModel):
+    id: int
+    scan_id: int
+    endpoint_id: int
+    parameter_id: int | None = None
+    endpoint_path: str
+    endpoint_method: str
+    parameter_name: str | None = None
+    parameter_location: str | None = None
+    parameter_type: str | None = None
+    vuln_type: str
+    severity: str
+    cvss_score: float
+    evidence_payload: str
+    remediation_advice: str
+    status: str
+    created_at: str
+
+
+@app.post("/api/targets/{target_id}/scans", status_code=202, response_model=Phase2ScanCreateResponse)
+def trigger_target_vulnerability_scan(
+    target_id: int,
+    payload: Phase2ScanRequest = Phase2ScanRequest(),
+    background: BackgroundTasks = BackgroundTasks(),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Initialize and trigger an asynchronous Phase 2 vulnerability scan with configurable scan profiles."""
+    target = db.get(Target, target_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found.")
+
+    control = get_safety_control(db)
+    if control.kill_switch_engaged:
+        db.add(AuditEvent(event_type="scan_request_denied", decision="deny", details="Phase 2 scan blocked: kill switch engaged."))
+        db.commit()
+        raise HTTPException(status_code=409, detail=f"Kill switch engaged: {control.reason or 'administrative halt'}.")
+
+    try:
+        validate_target_url(target.base_url)
+    except ScopeRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    snapshot = {
+        "profile": payload.profile,
+        "options": payload.options,
+        "triggered_at": datetime.now(timezone.utc).isoformat(),
+    }
+    vscan = VulnerabilityScan(
+        target_id=target.id,
+        status="pending",
+        config_snapshot=json.dumps(snapshot),
+    )
+    db.add(vscan)
+    db.flush()
+    db.add(
+        AuditEvent(
+            scan_id=None,
+            event_type="phase2_scan_queued",
+            decision="allow",
+            details=f"Phase 2 scan #{vscan.id} queued for target #{target.id} with profile '{payload.profile}'.",
+        )
+    )
+    db.commit()
+    db.refresh(vscan)
+
+    def _execute_scan_async(scan_id: int) -> None:
+        with SessionLocal() as worker_db:
+            try:
+                run_vulnerability_scan(worker_db, scan_id)
+            except Exception:
+                pass
+
+    background.add_task(_execute_scan_async, vscan.id)
+
+    return {
+        "id": vscan.id,
+        "target_id": target.id,
+        "status": vscan.status,
+        "profile": payload.profile,
+        "started_at": vscan.started_at.isoformat() if vscan.started_at else None,
+        "message": f"Phase 2 scan #{vscan.id} initiated with profile '{payload.profile}'.",
+    }
+
+
+@app.get("/api/targets/{target_id}/scans/{scan_id}", response_model=Phase2ScanStatusResponse)
+def get_target_vulnerability_scan_status(
+    target_id: int,
+    scan_id: int,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Retrieve real-time scan progress, live finding counts by severity, and execution metrics."""
+    target = db.get(Target, target_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found.")
+
+    vscan = db.get(VulnerabilityScan, scan_id)
+    if not vscan or vscan.target_id != target.id:
+        raise HTTPException(status_code=404, detail=f"Scan #{scan_id} not found for target #{target_id}.")
+
+    config_data: dict[str, Any] = {}
+    try:
+        config_data = json.loads(vscan.config_snapshot) if vscan.config_snapshot else {}
+    except Exception:
+        config_data = {}
+
+    profile = config_data.get("profile", "quick")
+    metrics = config_data.get("metrics", {})
+
+    # Live finding counts
+    live_findings = db.execute(
+        select(DiscoveredVulnerability).where(DiscoveredVulnerability.scan_id == vscan.id)
+    ).scalars().all()
+
+    severity_counts = {
+        "critical": sum(1 for f in live_findings if f.severity == "critical"),
+        "high": sum(1 for f in live_findings if f.severity == "high"),
+        "medium": sum(1 for f in live_findings if f.severity == "medium"),
+        "low": sum(1 for f in live_findings if f.severity == "low"),
+        "info": sum(1 for f in live_findings if f.severity == "info"),
+    }
+    total_findings = len(live_findings)
+
+    duration = None
+    if vscan.started_at:
+        end_time = vscan.completed_at or datetime.now(timezone.utc)
+        duration = round((end_time - vscan.started_at).total_seconds(), 2)
+
+    progress = 0
+    if vscan.status == "completed":
+        progress = 100
+    elif vscan.status == "running":
+        progress = 50
+    elif vscan.status == "pending":
+        progress = 0
+    elif vscan.status == "failed":
+        progress = 100
+
+    return {
+        "id": vscan.id,
+        "target_id": target.id,
+        "status": vscan.status,
+        "profile": profile,
+        "started_at": vscan.started_at.isoformat() if vscan.started_at else None,
+        "completed_at": vscan.completed_at.isoformat() if vscan.completed_at else None,
+        "duration_seconds": duration,
+        "progress_percentage": progress,
+        "findings_count": total_findings,
+        "findings_by_severity": severity_counts,
+        "metrics": metrics,
+        "config_snapshot": config_data,
+    }
+
+
+@app.get("/api/targets/{target_id}/vulnerabilities", response_model=list[DiscoveredVulnerabilityResponse])
+def list_target_vulnerabilities(
+    target_id: int,
+    scan_id: int | None = None,
+    severity: str | None = None,
+    vuln_type: str | None = None,
+    status: str | None = None,
+    endpoint_id: int | None = None,
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """Filterable vulnerability register with parameter links, evidence snippets, and remediation guidance."""
+    target = db.get(Target, target_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found.")
+
+    stmt = (
+        select(
+            DiscoveredVulnerability,
+            Endpoint.path,
+            Endpoint.method,
+            EndpointParameter.name,
+            EndpointParameter.location,
+            EndpointParameter.observed_type,
+        )
+        .join(Endpoint, DiscoveredVulnerability.endpoint_id == Endpoint.id)
+        .outerjoin(EndpointParameter, DiscoveredVulnerability.parameter_id == EndpointParameter.id)
+        .where(Endpoint.target_id == target.id)
+    )
+
+    if scan_id is not None:
+        stmt = stmt.where(DiscoveredVulnerability.scan_id == scan_id)
+    if severity is not None:
+        stmt = stmt.where(DiscoveredVulnerability.severity == severity.strip().lower())
+    if vuln_type is not None:
+        stmt = stmt.where(DiscoveredVulnerability.vuln_type == vuln_type.strip().lower())
+    if status is not None:
+        stmt = stmt.where(DiscoveredVulnerability.status == status.strip().lower())
+    if endpoint_id is not None:
+        stmt = stmt.where(DiscoveredVulnerability.endpoint_id == endpoint_id)
+
+    stmt = stmt.order_by(DiscoveredVulnerability.cvss_score.desc(), DiscoveredVulnerability.id.desc())
+    rows = db.execute(stmt).all()
+
+    results = []
+    for vuln, ep_path, ep_method, param_name, param_location, param_type in rows:
+        results.append({
+            "id": vuln.id,
+            "scan_id": vuln.scan_id,
+            "endpoint_id": vuln.endpoint_id,
+            "parameter_id": vuln.parameter_id,
+            "endpoint_path": ep_path,
+            "endpoint_method": ep_method,
+            "parameter_name": param_name,
+            "parameter_location": param_location,
+            "parameter_type": param_type,
+            "vuln_type": vuln.vuln_type,
+            "severity": vuln.severity,
+            "cvss_score": vuln.cvss_score,
+            "evidence_payload": vuln.evidence_payload,
+            "remediation_advice": vuln.remediation_advice,
+            "status": vuln.status,
+            "created_at": vuln.created_at.isoformat() if vuln.created_at else datetime.now(timezone.utc).isoformat(),
+        })
+
+    return results
+

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -187,3 +187,31 @@ class TestExecution(Base):
     reviewer_notes: Mapped[str] = mapped_column(String(500), default="")
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class VulnerabilityScan(Base):
+    """Phase 2: Targeted vulnerability scan runs against targets."""
+    __tablename__ = "vulnerability_scans"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_id: Mapped[int] = mapped_column(ForeignKey("targets.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="pending")  # pending, running, completed, failed
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    config_snapshot: Mapped[str] = mapped_column(Text(), default="{}")
+
+
+class DiscoveredVulnerability(Base):
+    """Phase 2: Discovered vulnerabilities linked to endpoints and parameters."""
+    __tablename__ = "discovered_vulnerabilities"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("vulnerability_scans.id", ondelete="CASCADE"), nullable=False)
+    endpoint_id: Mapped[int] = mapped_column(ForeignKey("endpoints.id", ondelete="CASCADE"), nullable=False)
+    parameter_id: Mapped[int | None] = mapped_column(ForeignKey("endpoint_parameters.id", ondelete="SET NULL"), nullable=True)
+    vuln_type: Mapped[str] = mapped_column(String(100), nullable=False)  # bola_idor, sqli, nosqli, command_injection, mass_assignment, business_logic_bypass, unauthorized_shadow_exposure, unrestricted_zombie_access, etc.
+    severity: Mapped[str] = mapped_column(String(40), default="medium")  # critical, high, medium, low, info
+    cvss_score: Mapped[float] = mapped_column(Float, default=0.0)
+    evidence_payload: Mapped[str] = mapped_column(Text(), default="")
+    remediation_advice: Mapped[str] = mapped_column(Text(), default="")
+    status: Mapped[str] = mapped_column(String(40), default="open")  # open, verified, false_positive
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
