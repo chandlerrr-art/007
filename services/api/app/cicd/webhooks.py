@@ -12,8 +12,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.core.encryption import EncryptedEnvelope, EncryptionError, get_encryption_service
 from app.models import WebhookSubscription
-from app.safety.credentials import decrypt_secret
+from app.safety.credentials import decrypt_secret, register_secret_for_redaction
 
 
 class WebhookDeliveryError(RuntimeError):
@@ -70,7 +71,21 @@ async def dispatch_subscription(subscription: WebhookSubscription, event: str, d
     validate_webhook_url(subscription.url)
     envelope = {"event": event, "subscription_id": subscription.id, "target_id": subscription.target_id, "data": data}
     body = json.dumps(_payload_for(subscription.url, envelope), sort_keys=True, separators=(",", ":")).encode("utf-8")
-    signature = signature_for(decrypt_secret(subscription.secret_key), body)
+    if subscription.secret_key_wrapped_dek:
+        try:
+            secret = get_encryption_service().decrypt(
+                EncryptedEnvelope(subscription.secret_key, subscription.secret_key_wrapped_dek),
+                context=f"webhook-subscription:{subscription.id}",
+            )
+        except EncryptionError as exc:
+            raise WebhookDeliveryError("Webhook secret could not be decrypted.") from exc
+    else:
+        try:
+            secret = decrypt_secret(subscription.secret_key)
+        except ValueError as exc:
+            raise WebhookDeliveryError("Webhook secret could not be decrypted.") from exc
+    register_secret_for_redaction(secret)
+    signature = signature_for(secret, body)
     status = await asyncio.to_thread(_post_json, subscription.url, body, signature)
     return {"subscription_id": subscription.id, "delivered": 200 <= status < 300, "http_status": status}
 

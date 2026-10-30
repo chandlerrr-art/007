@@ -26,7 +26,9 @@ class EnterprisePhase5Tests(unittest.TestCase):
         self.Session = sessionmaker(bind=self.engine, autoflush=False, expire_on_commit=False)
         self.db = self.Session()
         self.secret_before = settings.enterprise_auth_secret
+        self.master_kek_before = settings.master_kek_secret
         settings.enterprise_auth_secret = "test-workspace-signing-secret-0123456789"
+        settings.master_kek_secret = "enterprise-test-master-kek-secret-0123456789"
         self.org_a = Organization(name="Workspace A", slug="workspace-a")
         self.org_b = Organization(name="Workspace B", slug="workspace-b")
         self.db.add_all([self.org_a, self.org_b]); self.db.flush()
@@ -52,6 +54,7 @@ class EnterprisePhase5Tests(unittest.TestCase):
         self.client_cleanup()
         self.db.close(); Base.metadata.drop_all(self.engine); self.engine.dispose()
         settings.enterprise_auth_secret = self.secret_before
+        settings.master_kek_secret = self.master_kek_before
         app.dependency_overrides.clear()
 
     def client_cleanup(self):

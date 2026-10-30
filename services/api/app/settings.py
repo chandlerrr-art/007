@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     allowed_target_origins: str = "http://demo-app:8080"
     allowed_staging_origins: str = ""
     staging_request_budget: int = 10
-    credential_encryption_key: str = "007-staging-secret-encryption-master-key-v1"
+    credential_encryption_key: str = ""
     jira_base_url: str = ""
     jira_email: str = ""
     jira_api_token: str = ""
@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     github_token: str = ""
     enterprise_auth_enabled: bool = True
     enterprise_auth_secret: str = ""
+    master_kek_secret: str = ""
+    master_kek_key_id: str = "env-v1"
     redis_url: str = "redis://redis:6379/0"
     celery_always_eager: bool = False
     celery_scan_soft_time_limit: int = 900

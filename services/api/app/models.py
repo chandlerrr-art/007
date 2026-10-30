@@ -227,6 +227,8 @@ class RemediationTicket(Base):
     external_ticket_url: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
     assignee: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    access_token_ciphertext: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    access_token_wrapped_dek: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -311,7 +313,7 @@ class WebhookSubscription(Base):
     target_id: Mapped[int | None] = mapped_column(ForeignKey("targets.id", ondelete="CASCADE"), nullable=True)
     url: Mapped[str] = mapped_column(String(2000), nullable=False)
     secret_key: Mapped[str] = mapped_column(String(1000), nullable=False)  # encrypted at rest
+    secret_key_wrapped_dek: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     events: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-

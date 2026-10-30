@@ -45,9 +45,8 @@ from app.inventory.service import (
     normalize_endpoint_path,
 )
 from app.safety.credentials import (
-    decrypt_secret,
-    encrypt_secret,
     get_call_time_auth_headers,
+    register_secret_for_redaction,
     scrub_known_secrets,
     store_credential,
 )
@@ -78,6 +77,7 @@ from app.auth.rbac import (
 from app.vulnerability.tasks import run_scan_task
 from app.ai.patcher_tasks import generate_patch_task
 from app.core.celery_app import celery_app
+from app.core.encryption import EncryptionError, get_encryption_service
 from app.settings import settings
 
 app = FastAPI(title="007 API", version="0.1.0", description="Local-first authorized security testing platform")
@@ -717,15 +717,18 @@ def add_credential(target_id: int, payload: CredentialCreate, db: Session = Depe
     if not target:
         raise HTTPException(status_code=404, detail="Target not found.")
     
-    cred = store_credential(
-        db,
-        target_id=target.id,
-        role=payload.role,
-        username=payload.username,
-        secret=payload.secret,
-        auth_type=payload.auth_type,
-        header_name=payload.header_name,
-    )
+    try:
+        cred = store_credential(
+            db,
+            target_id=target.id,
+            role=payload.role,
+            username=payload.username,
+            secret=payload.secret,
+            auth_type=payload.auth_type,
+            header_name=payload.header_name,
+        )
+    except EncryptionError as exc:
+        raise HTTPException(status_code=503, detail="Credential encryption is not configured.") from exc
     # Redaction discipline: Only role and username in audit log; cleartext secret NEVER logged
     db.add(AuditEvent(
         event_type="test_credential_registered",
@@ -1264,7 +1267,13 @@ def trigger_target_vulnerability_scan(
 
     organization_id = db.info.get("organization_id", target.organization_id)
     auth_header = request.headers.get("authorization") if request else None
-    encrypted_auth = encrypt_secret(auth_header) if auth_header and settings.enterprise_auth_enabled else None
+    encrypted_auth = (
+        get_encryption_service().encrypt(
+            auth_header,
+            context=f"celery:scan:{vscan.id}:organization:{organization_id}:authorization",
+        ).as_dict()
+        if auth_header and settings.enterprise_auth_enabled else None
+    )
     try:
         task_result = run_scan_task.apply_async(kwargs={
             "scan_id": vscan.id, "target_id": target.id,
@@ -1436,6 +1445,8 @@ def create_vulnerability_ticket(vulnerability_id: int, payload: TicketCreateRequ
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except TicketingError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except EncryptionError as exc:
+        raise HTTPException(status_code=503, detail="Ticket credential encryption is not configured.") from exc
     return {"id": ticket.id, "vulnerability_id": ticket.vulnerability_id, "external_system": ticket.external_system,
             "external_ticket_key": ticket.external_ticket_key, "external_ticket_url": ticket.external_ticket_url,
             "status": ticket.status, "assignee": ticket.assignee, "created_at": ticket.created_at}
@@ -1451,6 +1462,8 @@ def sync_remediation_ticket(ticket_id: int, db: Session = Depends(get_db)) -> di
         ticket = sync_ticket(db, ticket)
     except TicketingError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except EncryptionError as exc:
+        raise HTTPException(status_code=503, detail="Ticket credential decryption is not configured.") from exc
     return {"id": ticket.id, "vulnerability_id": ticket.vulnerability_id, "external_system": ticket.external_system,
             "external_ticket_key": ticket.external_ticket_key, "external_ticket_url": ticket.external_ticket_url,
             "status": ticket.status, "assignee": ticket.assignee, "updated_at": ticket.updated_at}
@@ -1565,14 +1578,33 @@ def upsert_webhook_subscription(payload: WebhookSubscriptionRequest, db: Session
         subscription.url, subscription.target_id = payload.url, payload.target_id
         subscription.events, subscription.is_active = sorted(set(payload.events)), payload.is_active
         if payload.secret_key:
-            subscription.secret_key = encrypt_secret(payload.secret_key)
+            try:
+                envelope = get_encryption_service().encrypt(
+                    payload.secret_key, context=f"webhook-subscription:{subscription.id}"
+                )
+            except EncryptionError as exc:
+                raise HTTPException(status_code=503, detail="Credential encryption is not configured.") from exc
+            subscription.secret_key = envelope.ciphertext
+            subscription.secret_key_wrapped_dek = envelope.wrapped_dek
+            register_secret_for_redaction(payload.secret_key)
         db.commit(); db.refresh(subscription)
         return _webhook_public(subscription)
     if not payload.secret_key:
         raise HTTPException(status_code=422, detail="secret_key is required when creating a subscription.")
     subscription = WebhookSubscription(target_id=payload.target_id, url=payload.url,
-        secret_key=encrypt_secret(payload.secret_key), events=sorted(set(payload.events)), is_active=payload.is_active)
-    db.add(subscription); db.commit(); db.refresh(subscription)
+        secret_key="", events=sorted(set(payload.events)), is_active=payload.is_active)
+    db.add(subscription)
+    db.flush()
+    try:
+        envelope = get_encryption_service().encrypt(
+            payload.secret_key, context=f"webhook-subscription:{subscription.id}"
+        )
+    except EncryptionError as exc:
+        raise HTTPException(status_code=503, detail="Credential encryption is not configured.") from exc
+    subscription.secret_key = envelope.ciphertext
+    subscription.secret_key_wrapped_dek = envelope.wrapped_dek
+    register_secret_for_redaction(payload.secret_key)
+    db.commit(); db.refresh(subscription)
     return _webhook_public(subscription)
 
 
@@ -1635,9 +1667,15 @@ def generate_vulnerability_patch(vulnerability_id: int, request: Request, payloa
         task_result = generate_patch_task.apply_async(kwargs={
             "vulnerability_id": vulnerability.id,
             "target_file_path": payload.target_file_path,
-            "encrypted_source_code": encrypt_secret(payload.source_code),
+            "encrypted_source_code": get_encryption_service().encrypt(
+                payload.source_code,
+                context=f"celery:patch:{vulnerability.id}:organization:{context.organization_id}:source",
+            ).as_dict(),
             "organization_id": context.organization_id,
-            "authorization_header": encrypt_secret(authorization),
+            "authorization_header": get_encryption_service().encrypt(
+                authorization,
+                context=f"celery:patch:{vulnerability.id}:organization:{context.organization_id}:authorization",
+            ).as_dict(),
             "db_dialect": payload.db_dialect,
         })
     except Exception as exc:
@@ -1711,4 +1749,3 @@ def apply_patch(patch_id: int, payload: PatchApplyRequest = PatchApplyRequest(),
     result = _patch_public(patch)
     result.update({"repository_modified": False, "message": "Patch application was recorded; no repository file was changed."})
     return result
-

@@ -11,9 +11,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base
 from app.models import Target, WebhookSubscription
+from app.core.encryption import get_encryption_service
 from app.cicd.gates import evaluate_gate
 from app.cicd.webhooks import dispatch_event, dispatch_subscription, signature_for
 from app.safety.credentials import encrypt_secret
+from app.settings import settings
 
 
 class CICDPhase4Tests(unittest.TestCase):
@@ -22,11 +24,14 @@ class CICDPhase4Tests(unittest.TestCase):
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine, autoflush=False, expire_on_commit=False)
         self.db = self.Session()
+        self.old_legacy_key = settings.credential_encryption_key
+        settings.credential_encryption_key = "legacy-cicd-test-key-123456789012"
         self.target = Target(name="CI target", base_url="http://demo", environment="test", status="authorized")
         self.db.add(self.target); self.db.flush()
 
     def tearDown(self):
         self.db.close(); Base.metadata.drop_all(self.engine); self.engine.dispose()
+        settings.credential_encryption_key = self.old_legacy_key
 
     def test_gate_pass_warn_and_fail_policies(self):
         high = SimpleNamespace(id=1, vuln_type="bola_idor", severity="high", cvss_score=7.5, endpoint_id=10, status="open")
@@ -64,6 +69,25 @@ class CICDPhase4Tests(unittest.TestCase):
         self.assertEqual(args[0], subscription.url)
         self.assertEqual(args[2], signature_for(secret, args[1]))
         self.assertIn(b"gate.failed", args[1])
+
+    def test_dispatch_decrypts_envelope_bound_to_subscription(self):
+        old_master_kek = settings.master_kek_secret
+        settings.master_kek_secret = "webhook-test-master-kek-secret-012345"
+        try:
+            secret = "wrapped-webhook-secret"
+            envelope = get_encryption_service().encrypt(secret, context="webhook-subscription:8")
+            subscription = WebhookSubscription(
+                id=8, target_id=self.target.id, url="https://example.com/hook",
+                secret_key=envelope.ciphertext, secret_key_wrapped_dek=envelope.wrapped_dek,
+                events=["gate.failed"], is_active=True,
+            )
+            with patch("app.cicd.webhooks.validate_webhook_url"), patch("app.cicd.webhooks._post_json", return_value=204) as post:
+                result = asyncio.run(dispatch_subscription(subscription, "gate.failed", {"scan_id": 5}))
+
+            self.assertTrue(result["delivered"])
+            self.assertEqual(post.call_args.args[2], signature_for(secret, post.call_args.args[1]))
+        finally:
+            settings.master_kek_secret = old_master_kek
 
     def test_dispatch_event_matches_target_and_global_subscriptions(self):
         local = WebhookSubscription(target_id=self.target.id, url="https://local.example/hook", secret_key=encrypt_secret("secret-local"), events=["gate.failed"], is_active=True)

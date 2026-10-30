@@ -13,6 +13,8 @@ from app.models import (ComplianceFramework, DiscoveredVulnerability, Endpoint,
 from app.remediation.compliance import classify, map_vulnerability, target_posture
 from app.remediation.reporting import executive_report, render_html
 from app.remediation.ticketing import create_ticket, sync_ticket
+from app.core.encryption import get_encryption_service
+from app.settings import settings
 
 
 class RemediationPhase3Tests(unittest.TestCase):
@@ -63,6 +65,36 @@ class RemediationPhase3Tests(unittest.TestCase):
         self.assertEqual(posture["compliance_percentage"], 0)  # one seeded OWASP category and it fails
         self.assertEqual(posture["categories"][0]["id"], "API1:2023")
         self.assertEqual(posture["failing_endpoints"][0]["endpoint"], "POST /api/payments")
+
+    @patch("app.remediation.ticketing.adapter_for")
+    def test_ticket_token_is_enveloped_and_reused_during_sync(self, adapter_for):
+        old_master_kek = settings.master_kek_secret
+        settings.master_kek_secret = "ticket-test-master-kek-secret-0123456789"
+        try:
+            adapter = Mock()
+            adapter.credential_token = "ticket-provider-secret"
+            adapter.create_issue.return_value = {"key": "SEC-43", "url": "https://tracker/SEC-43"}
+            adapter.get_status.return_value = {"status": "open"}
+            adapter_for.return_value = adapter
+
+            ticket = create_ticket(self.db, self.vuln.id, "github")
+
+            self.assertIsNotNone(ticket.access_token_ciphertext)
+            self.assertIsNotNone(ticket.access_token_wrapped_dek)
+            self.assertNotIn("ticket-provider-secret", ticket.access_token_ciphertext)
+            context = f"remediation-ticket:{ticket.id}:organization:{self.target.organization_id}"
+            self.assertEqual(
+                get_encryption_service().decrypt(
+                    {"ciphertext": ticket.access_token_ciphertext, "wrapped_dek": ticket.access_token_wrapped_dek},
+                    context=context,
+                ),
+                "ticket-provider-secret",
+            )
+
+            sync_ticket(self.db, ticket)
+            self.assertEqual(adapter_for.call_args.args, ("github", "ticket-provider-secret"))
+        finally:
+            settings.master_kek_secret = old_master_kek
 
     def test_executive_report_aggregates_risk_flow_and_exports_html(self):
         report = executive_report(self.db, self.target.id)

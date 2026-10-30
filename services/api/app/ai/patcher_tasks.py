@@ -25,13 +25,16 @@ def _result(patch: CodePatch, organization_id: int, strategy: str = "", rational
                  soft_time_limit=settings.celery_patch_soft_time_limit,
                  time_limit=settings.celery_patch_time_limit)
 def generate_patch_task(self, vulnerability_id: int, target_file_path: str,
-                        encrypted_source_code: str, organization_id: int,
-                        authorization_header: str, db_dialect: str | None = None) -> dict:
+                        encrypted_source_code: str | dict, organization_id: int,
+                        authorization_header: str | dict, db_dialect: str | None = None) -> dict:
     """Generate a candidate in a worker session after rechecking tenant and role."""
     with SessionLocal() as db:
         db.info["organization_id"] = organization_id
         try:
-            clear_header = decrypt_secret(authorization_header)
+            clear_header = decrypt_secret(
+                authorization_header,
+                context=f"celery:patch:{vulnerability_id}:organization:{organization_id}:authorization",
+            )
             context = resolve_workspace_context(clear_header, db)
             if context.organization_id != organization_id:
                 raise PermissionError("Task workspace does not match the authenticated workspace.")
@@ -43,7 +46,10 @@ def generate_patch_task(self, vulnerability_id: int, target_file_path: str,
             vulnerability = ensure_vulnerability_access(db, vulnerability_id, context)
             endpoint = db.get(Endpoint, vulnerability.endpoint_id)
             parameter = db.get(EndpointParameter, vulnerability.parameter_id) if vulnerability.parameter_id else None
-            source_code = decrypt_secret(encrypted_source_code)
+            source_code = decrypt_secret(
+                encrypted_source_code,
+                context=f"celery:patch:{vulnerability_id}:organization:{organization_id}:source",
+            )
             candidate = generate_patch(vulnerability, target_file_path, source_code,
                                        db_dialect=db_dialect,
                                        endpoint_parameter=parameter.name if parameter else None)

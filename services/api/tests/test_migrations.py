@@ -41,7 +41,12 @@ class MigrationTests(unittest.TestCase):
                     inventory_type = str(next(column["type"] for column in inspector.get_columns("inventory_snapshots") if column["name"] == "inventory_json")).upper()
                     self.assertIn("TEXT", inventory_type)
                     with engine.connect() as connection:
-                        self.assertEqual(connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), "0011_celery_task_tracking")
+                        self.assertEqual(connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), "0012_envelope_encryption")
+                    self.assertIn("secret_key_wrapped_dek", {column["name"] for column in inspector.get_columns("webhook_subscriptions")})
+                    self.assertTrue({"access_token_ciphertext", "access_token_wrapped_dek"}.issubset(
+                        {column["name"] for column in inspector.get_columns("remediation_tickets")}
+                    ))
+                    self.assertIn("encrypted_secret_wrapped_dek", {column["name"] for column in inspector.get_columns("test_credentials")})
                 finally:
                     engine.dispose()
         finally:

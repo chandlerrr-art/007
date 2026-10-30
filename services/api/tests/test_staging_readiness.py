@@ -19,6 +19,7 @@ from app.safety.credentials import (
     scrub_known_secrets,
     store_credential,
 )
+from app.settings import settings
 from app.safety.policy import (
     ScopeRejected,
     endpoint_rate_limiter,
@@ -29,13 +30,14 @@ from app.safety.policy import (
 )
 from app.scans.orchestrator import _run_scan
 from app.scans.registry import executor_registry, StagingTargetExecutor
-from app.settings import settings
-
-
 class StagingReadinessGuardrailsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.old_origins = settings.allowed_target_origins
         self.old_staging_origins = settings.allowed_staging_origins
+        self.old_master_kek = settings.master_kek_secret
+        self.old_legacy_key = settings.credential_encryption_key
+        settings.master_kek_secret = "staging-test-master-kek-secret-0123456789"
+        settings.credential_encryption_key = "staging-legacy-encryption-key-123456"
         settings.allowed_target_origins = "http://demo-app:8080"
         settings.allowed_staging_origins = "http://staging-app:8080,https://staging.internal:8443"
 
@@ -62,6 +64,8 @@ class StagingReadinessGuardrailsTests(unittest.TestCase):
         self.engine.dispose()
         settings.allowed_target_origins = self.old_origins
         settings.allowed_staging_origins = self.old_staging_origins
+        settings.master_kek_secret = self.old_master_kek
+        settings.credential_encryption_key = self.old_legacy_key
         endpoint_rate_limiter.reset()
 
     # --- 1. Separate Staging-Target Executor & Registry ---
@@ -129,7 +133,10 @@ class StagingReadinessGuardrailsTests(unittest.TestCase):
             self.assertNotIn(secret_text, row.encrypted_secret)
             
             # Verify call-time decryption
-            decrypted = decrypt_secret(row.encrypted_secret)
+            decrypted = decrypt_secret(
+                {"ciphertext": row.encrypted_secret, "wrapped_dek": row.encrypted_secret_wrapped_dek},
+                context=f"test-credential:{row.id}:target:{target_id}",
+            )
             self.assertEqual(decrypted, secret_text)
             
             headers = get_call_time_auth_headers(db, target_id, "travel_agent")

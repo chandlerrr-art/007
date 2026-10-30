@@ -1,4 +1,5 @@
 import base64
+import binascii
 import hashlib
 import hmac
 import os
@@ -6,10 +7,11 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func, select
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, func, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.db import Base
+from app.core.encryption import EncryptedEnvelope, get_encryption_service
 from app.settings import settings
 
 
@@ -59,11 +61,13 @@ def _keystream(enc_key: bytes, nonce: bytes, length: int) -> bytes:
 
 
 def encrypt_secret(plaintext: str) -> str:
-    """Encrypt a secret for storage at rest with authenticated encryption."""
+    """Create legacy ciphertext for compatibility fixtures; use envelope encryption for new data."""
     if not plaintext:
         return ""
     register_secret_for_redaction(plaintext)
-    master_key = getattr(settings, "credential_encryption_key", "007-staging-secret-encryption-master-key-v1")
+    master_key = settings.credential_encryption_key
+    if not master_key:
+        raise ValueError("CREDENTIAL_ENCRYPTION_KEY is required to encrypt legacy credentials.")
     salt = os.urandom(16)
     nonce = os.urandom(16)
     enc_key, mac_key = _derive_keys(master_key, salt)
@@ -77,10 +81,16 @@ def encrypt_secret(plaintext: str) -> str:
     return base64.urlsafe_b64encode(payload).decode("ascii")
 
 
-def decrypt_secret(encrypted_value: str) -> str:
-    """Decrypt an encrypted-at-rest secret."""
+def decrypt_secret(encrypted_value: str | dict | None, *, context: str | None = None) -> str:
+    """Decrypt an envelope or a legacy ciphertext while old rows are migrated."""
     if not encrypted_value:
         return ""
+    if isinstance(encrypted_value, dict):
+        if not context:
+            raise ValueError("Encryption context is required to decrypt an envelope.")
+        decrypted = get_encryption_service().decrypt(encrypted_value, context=context)
+        register_secret_for_redaction(decrypted)
+        return decrypted
     try:
         payload = base64.urlsafe_b64decode(encrypted_value.encode("ascii"))
         if len(payload) < 16 + 16 + 32:
@@ -90,7 +100,9 @@ def decrypt_secret(encrypted_value: str) -> str:
         expected_tag = payload[32:64]
         ciphertext = payload[64:]
         
-        master_key = getattr(settings, "credential_encryption_key", "007-staging-secret-encryption-master-key-v1")
+        master_key = settings.credential_encryption_key
+        if not master_key:
+            raise ValueError("CREDENTIAL_ENCRYPTION_KEY is required to decrypt legacy credentials.")
         enc_key, mac_key = _derive_keys(master_key, salt)
         
         computed_tag = hmac.new(mac_key, salt + nonce + ciphertext, hashlib.sha256).digest()
@@ -101,7 +113,7 @@ def decrypt_secret(encrypted_value: str) -> str:
         decrypted = bytes(a ^ b for a, b in zip(ciphertext, stream)).decode("utf-8")
         register_secret_for_redaction(decrypted)
         return decrypted
-    except Exception as exc:
+    except (AttributeError, binascii.Error, TypeError, UnicodeError, ValueError) as exc:
         raise ValueError("Failed to decrypt stored credential.") from exc
 
 
@@ -116,6 +128,7 @@ class TestAccountCredential(Base):
     auth_type: Mapped[str] = mapped_column(String(40), default="bearer")  # bearer, basic, header, api_key
     header_name: Mapped[str] = mapped_column(String(80), default="Authorization")
     encrypted_secret: Mapped[str] = mapped_column(Text(), nullable=False)
+    encrypted_secret_wrapped_dek: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -129,17 +142,23 @@ def store_credential(
     auth_type: str = "bearer",
     header_name: str = "Authorization",
 ) -> TestAccountCredential:
-    """Store test credential encrypted at rest and register secret into redaction set."""
-    encrypted = encrypt_secret(secret)
+    """Store a test credential in an envelope bound to its target and record."""
     credential = TestAccountCredential(
         target_id=target_id,
         role=role,
         username=username,
         auth_type=auth_type,
         header_name=header_name,
-        encrypted_secret=encrypted,
+        encrypted_secret="",
     )
     db.add(credential)
+    db.flush()
+    envelope = get_encryption_service().encrypt(
+        secret, context=f"test-credential:{credential.id}:target:{target_id}"
+    )
+    credential.encrypted_secret = envelope.ciphertext
+    credential.encrypted_secret_wrapped_dek = envelope.wrapped_dek
+    register_secret_for_redaction(secret)
     db.commit()
     db.refresh(credential)
     return credential
@@ -160,7 +179,14 @@ def get_call_time_auth_headers(db: Session, target_id: int, role: str) -> dict[s
     if not credential:
         return {}
     
-    secret = decrypt_secret(credential.encrypted_secret)
+    if credential.encrypted_secret_wrapped_dek:
+        secret = get_encryption_service().decrypt(
+            EncryptedEnvelope(credential.encrypted_secret, credential.encrypted_secret_wrapped_dek),
+            context=f"test-credential:{credential.id}:target:{target_id}",
+        )
+        register_secret_for_redaction(secret)
+    else:
+        secret = decrypt_secret(credential.encrypted_secret)
     if not secret:
         return {}
 

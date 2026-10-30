@@ -7,8 +7,10 @@ from urllib.request import Request, urlopen
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.encryption import EncryptedEnvelope, EncryptionError, get_encryption_service
 from app.models import (DiscoveredVulnerability, Endpoint, RemediationTicket,
-                        VulnerabilityScan)
+                        Target, VulnerabilityScan)
+from app.safety.credentials import register_secret_for_redaction
 from app.settings import settings
 
 
@@ -29,9 +31,10 @@ class RestAdapter:
 
 
 class JiraCloudAdapter(RestAdapter):
-    def __init__(self):
+    def __init__(self, api_token: str | None = None):
         root = settings.jira_base_url.rstrip("/")
-        token = base64.b64encode(f"{settings.jira_email}:{settings.jira_api_token}".encode()).decode()
+        self.credential_token = api_token or settings.jira_api_token
+        token = base64.b64encode(f"{settings.jira_email}:{self.credential_token}".encode()).decode()
         self.root, self.project, self.headers = root, settings.jira_project_key, {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
 
     def create_issue(self, vulnerability: DiscoveredVulnerability, endpoint: Endpoint) -> dict:
@@ -51,10 +54,11 @@ class JiraCloudAdapter(RestAdapter):
 
 
 class GitHubIssuesAdapter(RestAdapter):
-    def __init__(self):
-        self.owner, self.repo, self.token = settings.github_owner, settings.github_repo, settings.github_token
+    def __init__(self, api_token: str | None = None):
+        self.owner, self.repo = settings.github_owner, settings.github_repo
+        self.credential_token = api_token or settings.github_token
         self.root = f"https://api.github.com/repos/{self.owner}/{self.repo}/issues"
-        self.headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json"}
+        self.headers = {"Authorization": f"Bearer {self.credential_token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json"}
 
     def create_issue(self, vulnerability: DiscoveredVulnerability, endpoint: Endpoint) -> dict:
         result = self.request(self.root, method="POST", headers=self.headers, payload={
@@ -69,16 +73,29 @@ class GitHubIssuesAdapter(RestAdapter):
         return {"status": "resolved" if result.get("state") == "closed" else "open", "assignee": (result.get("assignee") or {}).get("login")}
 
 
-def adapter_for(system: str):
+def adapter_for(system: str, api_token: str | None = None):
     if system == "jira":
-        if not (settings.jira_base_url and settings.jira_email and settings.jira_api_token and settings.jira_project_key):
+        if not (settings.jira_base_url and settings.jira_email and (api_token or settings.jira_api_token) and settings.jira_project_key):
             raise TicketingError("Jira integration is not configured.")
-        return JiraCloudAdapter()
+        return JiraCloudAdapter(api_token)
     if system == "github":
-        if not (settings.github_owner and settings.github_repo and settings.github_token):
+        if not (settings.github_owner and settings.github_repo and (api_token or settings.github_token)):
             raise TicketingError("GitHub integration is not configured.")
-        return GitHubIssuesAdapter()
+        return GitHubIssuesAdapter(api_token)
     raise ValueError("external_system must be jira or github")
+
+
+def _ticket_context(db: Session, ticket: RemediationTicket) -> str:
+    vulnerability = db.get(DiscoveredVulnerability, ticket.vulnerability_id)
+    if vulnerability is None:
+        raise LookupError("Vulnerability not found.")
+    endpoint = db.get(Endpoint, vulnerability.endpoint_id)
+    if endpoint is None:
+        raise LookupError("Endpoint not found.")
+    organization_id = db.scalar(select(Target.organization_id).where(Target.id == endpoint.target_id))
+    if organization_id is None:
+        raise LookupError("Ticket workspace not found.")
+    return f"remediation-ticket:{ticket.id}:organization:{organization_id}"
 
 
 def create_ticket(db: Session, vulnerability_id: int, system: str) -> RemediationTicket:
@@ -89,18 +106,38 @@ def create_ticket(db: Session, vulnerability_id: int, system: str) -> Remediatio
     if existing is not None:
         return existing
     endpoint = db.get(Endpoint, vuln.endpoint_id)
-    result = adapter_for(system).create_issue(vuln, endpoint)
+    adapter = adapter_for(system)
+    credential_token = getattr(adapter, "credential_token", None)
+    if not isinstance(credential_token, str) or not credential_token:
+        credential_token = None
+    encryption = get_encryption_service() if credential_token else None
+    result = adapter.create_issue(vuln, endpoint)
     if not result.get("key"):
         raise TicketingError("Ticket provider returned no ticket key.")
     ticket = RemediationTicket(vulnerability_id=vuln.id, external_system=system, external_ticket_key=str(result["key"]), external_ticket_url=result.get("url", ""), assignee=result.get("assignee"), status="open")
     db.add(ticket)
+    db.flush()
+    if credential_token:
+        wrapped = encryption.encrypt(credential_token, context=_ticket_context(db, ticket))
+        ticket.access_token_ciphertext = wrapped.ciphertext
+        ticket.access_token_wrapped_dek = wrapped.wrapped_dek
+        register_secret_for_redaction(credential_token)
     db.commit()
     db.refresh(ticket)
     return ticket
 
 
 def sync_ticket(db: Session, ticket: RemediationTicket) -> RemediationTicket:
-    result = adapter_for(ticket.external_system).get_status(ticket.external_ticket_key)
+    token = None
+    if bool(ticket.access_token_ciphertext) != bool(ticket.access_token_wrapped_dek):
+        raise EncryptionError("Ticket credential envelope is incomplete.")
+    if ticket.access_token_ciphertext and ticket.access_token_wrapped_dek:
+        token = get_encryption_service().decrypt(
+            EncryptedEnvelope(ticket.access_token_ciphertext, ticket.access_token_wrapped_dek),
+            context=_ticket_context(db, ticket),
+        )
+        register_secret_for_redaction(token)
+    result = adapter_for(ticket.external_system, token).get_status(ticket.external_ticket_key)
     status = result.get("status", "open")
     if status not in {"open", "in_progress", "resolved", "wont_fix"}:
         status = "open"

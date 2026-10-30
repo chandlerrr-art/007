@@ -14,7 +14,7 @@ from app.db import Base, get_db
 from app.main import app
 from app.models import (CodePatch, DiscoveredVulnerability, Endpoint, Organization,
                         Target, VulnerabilityScan, WorkspaceUser)
-from app.safety.credentials import decrypt_secret, encrypt_secret
+from app.core.encryption import get_encryption_service
 from app.settings import settings
 from app.vulnerability.tasks import run_scan_task
 
@@ -27,6 +27,10 @@ class CeleryWorkerTests(unittest.TestCase):
         self.db = self.Session()
         self.old_secret = settings.enterprise_auth_secret
         self.old_enterprise = settings.enterprise_auth_enabled
+        self.old_legacy_key = settings.credential_encryption_key
+        self.old_master_kek = settings.master_kek_secret
+        settings.master_kek_secret = "worker-test-master-kek-secret-0123456789"
+        settings.credential_encryption_key = "legacy-worker-test-key-1234567890"
         settings.enterprise_auth_secret = "worker-test-signing-secret-0123456789"
         settings.enterprise_auth_enabled = True
         self.old_eager = celery_app.conf.task_always_eager
@@ -47,7 +51,10 @@ class CeleryWorkerTests(unittest.TestCase):
             remediation_advice="Use parameterized queries.", status="open")
         self.db.add(self.vulnerability); self.db.commit()
         self.authorization = "Bearer " + issue_workspace_token("worker-user", self.org.id)
-        self.encrypted_authorization = encrypt_secret(self.authorization)
+        self.encrypted_authorization = get_encryption_service().encrypt(
+            self.authorization,
+            context=f"celery:scan:{self.scan.id}:organization:{self.org.id}:authorization",
+        ).as_dict()
 
     def tearDown(self):
         self.client_cleanup()
@@ -56,6 +63,8 @@ class CeleryWorkerTests(unittest.TestCase):
         celery_app.conf.task_eager_propagates = self.old_propagates
         settings.enterprise_auth_secret = self.old_secret
         settings.enterprise_auth_enabled = self.old_enterprise
+        settings.credential_encryption_key = self.old_legacy_key
+        settings.master_kek_secret = self.old_master_kek
         self.db.close(); Base.metadata.drop_all(self.engine); self.engine.dispose()
 
     def client_cleanup(self):
@@ -105,9 +114,15 @@ class CeleryWorkerTests(unittest.TestCase):
             result = generate_patch_task.apply_async(kwargs={
                 "vulnerability_id": self.vulnerability.id,
                 "target_file_path": "app/items.py",
-                "encrypted_source_code": encrypt_secret("db.execute(query)\n"),
+                "encrypted_source_code": get_encryption_service().encrypt(
+                    "db.execute(query)\n",
+                    context=f"celery:patch:{self.vulnerability.id}:organization:{self.org.id}:source",
+                ).as_dict(),
                 "organization_id": self.org.id,
-                "authorization_header": self.encrypted_authorization,
+                "authorization_header": get_encryption_service().encrypt(
+                    self.authorization,
+                    context=f"celery:patch:{self.vulnerability.id}:organization:{self.org.id}:authorization",
+                ).as_dict(),
                 "db_dialect": "sqlite",
             })
         self.assertEqual(result.state, "FAILURE")
@@ -126,9 +141,15 @@ class CeleryWorkerTests(unittest.TestCase):
         task_kwargs = {
                 "vulnerability_id": self.vulnerability.id,
                 "target_file_path": "app/items.py",
-                "encrypted_source_code": encrypt_secret(source),
+                "encrypted_source_code": get_encryption_service().encrypt(
+                    source,
+                    context=f"celery:patch:{self.vulnerability.id}:organization:{self.org.id}:source",
+                ).as_dict(),
                 "organization_id": self.org.id,
-                "authorization_header": self.encrypted_authorization,
+                "authorization_header": get_encryption_service().encrypt(
+                    self.authorization,
+                    context=f"celery:patch:{self.vulnerability.id}:organization:{self.org.id}:authorization",
+                ).as_dict(),
                 "db_dialect": "sqlite",
             }
         with patch("app.ai.patcher_tasks.SessionLocal", self.Session):
@@ -158,7 +179,10 @@ class CeleryWorkerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202, response.text)
         kwargs = dispatch.call_args.kwargs["kwargs"]
         self.assertEqual(kwargs["organization_id"], self.org.id)
-        self.assertEqual(decrypt_secret(kwargs["authorization_header"]), self.authorization)
+        self.assertEqual(get_encryption_service().decrypt(
+            kwargs["authorization_header"],
+            context=f"celery:scan:{kwargs['scan_id']}:organization:{self.org.id}:authorization",
+        ), self.authorization)
         self.assertEqual(kwargs["target_id"], self.target.id)
         self.assertEqual(kwargs["scan_id"], response.json()["id"])
 
@@ -177,8 +201,14 @@ class CeleryWorkerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202, response.text)
         kwargs = dispatch.call_args.kwargs["kwargs"]
         self.assertEqual(kwargs["organization_id"], self.org.id)
-        self.assertEqual(decrypt_secret(kwargs["authorization_header"]), self.authorization)
-        self.assertEqual(decrypt_secret(kwargs["encrypted_source_code"]), source)
+        self.assertEqual(get_encryption_service().decrypt(
+            kwargs["authorization_header"],
+            context=f"celery:patch:{self.vulnerability.id}:organization:{self.org.id}:authorization",
+        ), self.authorization)
+        self.assertEqual(get_encryption_service().decrypt(
+            kwargs["encrypted_source_code"],
+            context=f"celery:patch:{self.vulnerability.id}:organization:{self.org.id}:source",
+        ), source)
 
 
 if __name__ == "__main__":
