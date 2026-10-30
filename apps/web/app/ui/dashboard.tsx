@@ -322,8 +322,8 @@ export default function Dashboard() {
   return <main className="shell operations-shell">
     <aside className="sidebar">
       <a className="brand" href="#overview" aria-label="007 command center home">
-        <span className="brand-mark">07</span>
-        <span className="brand-copy"><strong>ZERO SEVEN</strong><small>SECURITY OPS</small></span>
+        <span className="brand-mark">007</span>
+        <span className="brand-copy"><strong>007</strong><small>SECURITY OPS</small></span>
       </a>
       <div className="workspace-switcher"><span className="workspace-logo">A</span><span><small>WORKSPACE</small><b>Acme Security</b></span><ChevronDown size={14} /></div>
       <nav className="primary-nav" aria-label="Workspace navigation">
