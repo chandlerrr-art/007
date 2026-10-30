@@ -5,6 +5,7 @@ from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
@@ -28,6 +29,7 @@ from app.models import (
     TestExecution,
     TrafficLogEntry,
     VulnerabilityScan,
+    RemediationTicket,
 )
 from app.inventory.service import (
     classify_endpoints,
@@ -55,6 +57,9 @@ from app.safety.policy import (
 from app.scans.orchestrator import run_scan
 from app.scans.registry import executor_registry
 from app.vulnerability.engine import run_vulnerability_scan
+from app.remediation.compliance import target_posture
+from app.remediation.reporting import executive_report, render_html
+from app.remediation.ticketing import TicketingError, create_ticket, sync_ticket
 
 app = FastAPI(title="007 API", version="0.1.0", description="Local-first authorized security testing platform")
 app.add_middleware(
@@ -1385,4 +1390,52 @@ def list_target_vulnerabilities(
         })
 
     return results
+
+
+class TicketCreateRequest(BaseModel):
+    external_system: Literal["jira", "github"]
+
+
+@app.post("/api/vulnerabilities/{vulnerability_id}/tickets", status_code=201)
+def create_vulnerability_ticket(vulnerability_id: int, payload: TicketCreateRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        ticket = create_ticket(db, vulnerability_id, payload.external_system)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TicketingError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"id": ticket.id, "vulnerability_id": ticket.vulnerability_id, "external_system": ticket.external_system,
+            "external_ticket_key": ticket.external_ticket_key, "external_ticket_url": ticket.external_ticket_url,
+            "status": ticket.status, "assignee": ticket.assignee, "created_at": ticket.created_at}
+
+
+@app.post("/api/remediation/tickets/{ticket_id}/sync")
+def sync_remediation_ticket(ticket_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
+    ticket = db.get(RemediationTicket, ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="Ticket not found.")
+    try:
+        ticket = sync_ticket(db, ticket)
+    except TicketingError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"id": ticket.id, "vulnerability_id": ticket.vulnerability_id, "external_system": ticket.external_system,
+            "external_ticket_key": ticket.external_ticket_key, "external_ticket_url": ticket.external_ticket_url,
+            "status": ticket.status, "assignee": ticket.assignee, "updated_at": ticket.updated_at}
+
+
+@app.get("/api/targets/{target_id}/compliance")
+def get_target_compliance(target_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
+    if db.get(Target, target_id) is None:
+        raise HTTPException(status_code=404, detail="Target not found.")
+    return target_posture(db, target_id)
+
+
+@app.get("/api/targets/{target_id}/reports/executive")
+def get_executive_report(target_id: int, format: Literal["json", "html"] = "json", db: Session = Depends(get_db)):
+    if db.get(Target, target_id) is None:
+        raise HTTPException(status_code=404, detail="Target not found.")
+    report = executive_report(db, target_id)
+    if format == "html":
+        return HTMLResponse(render_html(report), headers={"Content-Disposition": f'attachment; filename="target-{target_id}-executive-report.html"'})
+    return report
 

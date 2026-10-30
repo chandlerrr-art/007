@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -213,5 +213,41 @@ class DiscoveredVulnerability(Base):
     evidence_payload: Mapped[str] = mapped_column(Text(), default="")
     remediation_advice: Mapped[str] = mapped_column(Text(), default="")
     status: Mapped[str] = mapped_column(String(40), default="open")  # open, verified, false_positive
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RemediationTicket(Base):
+    __tablename__ = "remediation_tickets"
+    __table_args__ = (UniqueConstraint("vulnerability_id", "external_system", name="uq_vuln_ticket_system"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    vulnerability_id: Mapped[int] = mapped_column(ForeignKey("discovered_vulnerabilities.id", ondelete="CASCADE"), nullable=False)
+    external_system: Mapped[str] = mapped_column(String(20), nullable=False)
+    external_ticket_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    external_ticket_url: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
+    assignee: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ComplianceFramework(Base):
+    __tablename__ = "compliance_frameworks"
+    __table_args__ = (UniqueConstraint("name", "version", "external_id", name="uq_compliance_framework_item"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    version: Mapped[str] = mapped_column(String(40), nullable=False)
+    category: Mapped[str] = mapped_column(String(40), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    description: Mapped[str] = mapped_column(Text(), default="")
+
+
+class VulnerabilityComplianceMapping(Base):
+    __tablename__ = "vulnerability_compliance_mappings"
+    __table_args__ = (UniqueConstraint("vulnerability_id", "framework_id", name="uq_vuln_compliance_mapping"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    vulnerability_id: Mapped[int] = mapped_column(ForeignKey("discovered_vulnerabilities.id", ondelete="CASCADE"), nullable=False)
+    framework_id: Mapped[int] = mapped_column(ForeignKey("compliance_frameworks.id", ondelete="CASCADE"), nullable=False)
+    rationale: Mapped[str] = mapped_column(String(500), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
