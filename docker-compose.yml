@@ -1,4 +1,15 @@
 services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   db:
     image: postgres:16-alpine
     environment:
@@ -20,12 +31,56 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://007:007-local-only@db:5432/007}
       ALLOWED_TARGET_ORIGINS: ${ALLOWED_TARGET_ORIGINS:-http://demo-app:8080}
+      ALLOWED_STAGING_ORIGINS: ${ALLOWED_STAGING_ORIGINS:-}
+      STAGING_REQUEST_BUDGET: ${STAGING_REQUEST_BUDGET:-10}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-007-staging-secret-encryption-master-key-v1}
+      ENTERPRISE_AUTH_ENABLED: ${ENTERPRISE_AUTH_ENABLED:-false}
+      ENTERPRISE_AUTH_SECRET: ${ENTERPRISE_AUTH_SECRET:-}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_ALWAYS_EAGER: ${CELERY_ALWAYS_EAGER:-false}
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-}
+      JIRA_EMAIL: ${JIRA_EMAIL:-}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      JIRA_PROJECT_KEY: ${JIRA_PROJECT_KEY:-}
+      GITHUB_OWNER: ${GITHUB_OWNER:-}
+      GITHUB_REPO: ${GITHUB_REPO:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
       demo-app:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./services/api
+    command: ["celery", "-A", "app.core.celery_app.celery_app", "worker", "--loglevel=INFO", "--queues=security-scans,patch-generation", "--concurrency=2"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://007:007-local-only@db:5432/007}
+      ALLOWED_TARGET_ORIGINS: ${ALLOWED_TARGET_ORIGINS:-http://demo-app:8080}
+      ALLOWED_STAGING_ORIGINS: ${ALLOWED_STAGING_ORIGINS:-}
+      STAGING_REQUEST_BUDGET: ${STAGING_REQUEST_BUDGET:-10}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-007-staging-secret-encryption-master-key-v1}
+      ENTERPRISE_AUTH_ENABLED: ${ENTERPRISE_AUTH_ENABLED:-false}
+      ENTERPRISE_AUTH_SECRET: ${ENTERPRISE_AUTH_SECRET:-}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_ALWAYS_EAGER: ${CELERY_ALWAYS_EAGER:-false}
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-}
+      JIRA_EMAIL: ${JIRA_EMAIL:-}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      JIRA_PROJECT_KEY: ${JIRA_PROJECT_KEY:-}
+      GITHUB_OWNER: ${GITHUB_OWNER:-}
+      GITHUB_REPO: ${GITHUB_REPO:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      demo-app:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   demo-app:
@@ -51,3 +106,4 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:

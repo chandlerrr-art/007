@@ -37,6 +37,7 @@
 
 6. Open <http://localhost:3000>. Click **New scan** to run the bounded check against the seeded localhost demo target. The API health endpoint is <http://localhost:8000/api/health> and its OpenAPI page is <http://localhost:8000/docs>.
 
+Enterprise workspace authentication is disabled by default for this localhost-only demo. For a deployment, set `ENTERPRISE_AUTH_ENABLED=true` and configure a high-entropy `ENTERPRISE_AUTH_SECRET` shared only with a trusted HS256 identity gateway; do not expose the unauthenticated local-demo configuration to a network.
 
 The backend exposes health and dashboard summaries; target registration and inventory; HAR import; scan start, status, cancellation, and JSON report; finding retest; safety status and kill switch; deploy webhooks; and the change feed. The OpenAPI page lists the request and response schemas.
 

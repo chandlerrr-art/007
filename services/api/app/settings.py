@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     github_token: str = ""
     enterprise_auth_enabled: bool = True
     enterprise_auth_secret: str = ""
+    redis_url: str = "redis://redis:6379/0"
+    celery_always_eager: bool = False
+    celery_scan_soft_time_limit: int = 900
+    celery_scan_time_limit: int = 960
+    celery_patch_soft_time_limit: int = 180
+    celery_patch_time_limit: int = 210
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

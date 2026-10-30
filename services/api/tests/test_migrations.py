@@ -37,11 +37,11 @@ class MigrationTests(unittest.TestCase):
                     target_columns = {column["name"] for column in inspector.get_columns("targets")}
                     self.assertIn("organization_id", target_columns)
                     patch_columns = {column["name"] for column in inspector.get_columns("code_patches")}
-                    self.assertTrue({"vulnerability_id", "target_file_path", "unified_diff", "ai_confidence_score", "status"}.issubset(patch_columns))
+                    self.assertTrue({"vulnerability_id", "target_file_path", "unified_diff", "ai_confidence_score", "status", "celery_task_id"}.issubset(patch_columns))
                     inventory_type = str(next(column["type"] for column in inspector.get_columns("inventory_snapshots") if column["name"] == "inventory_json")).upper()
                     self.assertIn("TEXT", inventory_type)
                     with engine.connect() as connection:
-                        self.assertEqual(connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), "0010_enterprise_ai_patching")
+                        self.assertEqual(connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), "0011_celery_task_tracking")
                 finally:
                     engine.dispose()
         finally:

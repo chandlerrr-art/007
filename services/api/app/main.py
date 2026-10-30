@@ -4,14 +4,14 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal, get_db
+from app.db import get_db
 from app.models import (
     AuditEvent,
     ChangeEvent,
@@ -61,13 +61,11 @@ from app.safety.policy import (
 )
 from app.scans.orchestrator import run_scan
 from app.scans.registry import executor_registry
-from app.vulnerability.engine import run_vulnerability_scan
 from app.remediation.compliance import target_posture
 from app.remediation.reporting import executive_report, render_html
 from app.remediation.ticketing import TicketingError, create_ticket, sync_ticket
 from app.cicd.gates import evaluate_gate
 from app.cicd.webhooks import WebhookDeliveryError, dispatch_event, dispatch_subscription
-from app.ai.patcher import PatchGenerationError, generate_patch
 from app.auth.rbac import (
     WorkspaceContext,
     ensure_target_access,
@@ -77,6 +75,10 @@ from app.auth.rbac import (
     require_session_permission,
     ALL_PERMISSIONS,
 )
+from app.vulnerability.tasks import run_scan_task
+from app.ai.patcher_tasks import generate_patch_task
+from app.core.celery_app import celery_app
+from app.settings import settings
 
 app = FastAPI(title="007 API", version="0.1.0", description="Local-first authorized security testing platform")
 app.add_middleware(
@@ -1174,6 +1176,7 @@ class Phase2ScanCreateResponse(BaseModel):
     target_id: int
     status: str
     profile: str
+    task_id: str | None = None
     started_at: str | None = None
     message: str
 
@@ -1215,8 +1218,8 @@ class DiscoveredVulnerabilityResponse(BaseModel):
 @app.post("/api/targets/{target_id}/scans", status_code=202, response_model=Phase2ScanCreateResponse)
 def trigger_target_vulnerability_scan(
     target_id: int,
+    request: Request,
     payload: Phase2ScanRequest = Phase2ScanRequest(),
-    background: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Initialize and trigger an asynchronous Phase 2 vulnerability scan with configurable scan profiles."""
@@ -1259,19 +1262,25 @@ def trigger_target_vulnerability_scan(
     db.commit()
     db.refresh(vscan)
 
-    def _execute_scan_async(scan_id: int) -> None:
-        with SessionLocal() as worker_db:
-            try:
-                run_vulnerability_scan(worker_db, scan_id)
-            except Exception:
-                pass
-
-    background.add_task(_execute_scan_async, vscan.id)
+    organization_id = db.info.get("organization_id", target.organization_id)
+    auth_header = request.headers.get("authorization") if request else None
+    encrypted_auth = encrypt_secret(auth_header) if auth_header and settings.enterprise_auth_enabled else None
+    try:
+        task_result = run_scan_task.apply_async(kwargs={
+            "scan_id": vscan.id, "target_id": target.id,
+            "organization_id": organization_id, "authorization_header": encrypted_auth,
+        })
+    except Exception as exc:
+        vscan.status = "failed"
+        vscan.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=503, detail="Unable to dispatch vulnerability scan to the worker queue.") from exc
 
     return {
         "id": vscan.id,
         "target_id": target.id,
         "status": vscan.status,
+        "task_id": task_result.id,
         "profile": payload.profile,
         "started_at": vscan.started_at.isoformat() if vscan.started_at else None,
         "message": f"Phase 2 scan #{vscan.id} initiated with profile '{payload.profile}'.",
@@ -1613,27 +1622,62 @@ def workspace_context(context: WorkspaceContext = Depends(get_workspace_context)
             "permissions": sorted(effective), "permission_boundaries": {"granted": sorted(effective), "not_granted": sorted(ALL_PERMISSIONS - effective)}}
 
 
-@app.post("/api/vulnerabilities/{vulnerability_id}/patch", status_code=201)
-def generate_vulnerability_patch(vulnerability_id: int, payload: PatchGenerateRequest,
+@app.post("/api/vulnerabilities/{vulnerability_id}/patch", status_code=202)
+def generate_vulnerability_patch(vulnerability_id: int, request: Request, payload: PatchGenerateRequest,
                                  context: WorkspaceContext = Depends(get_workspace_context),
                                  db: Session = Depends(get_db)) -> dict[str, Any]:
     require_permission(context, "patches.generate")
     vulnerability = ensure_vulnerability_access(db, vulnerability_id, context)
-    endpoint = db.get(Endpoint, vulnerability.endpoint_id)
-    parameter = db.get(EndpointParameter, vulnerability.parameter_id) if vulnerability.parameter_id else None
+    authorization = request.headers.get("authorization") if request else None
+    if not authorization:
+        raise HTTPException(status_code=401, detail="An authenticated workspace token is required for patch generation.")
     try:
-        candidate = generate_patch(vulnerability, payload.target_file_path, payload.source_code,
-                                   db_dialect=payload.db_dialect, endpoint_parameter=parameter.name if parameter else None)
-    except PatchGenerationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    patch = CodePatch(vulnerability_id=vulnerability.id, target_file_path=candidate.target_file_path,
-                      unified_diff=candidate.unified_diff, ai_confidence_score=candidate.confidence, status="generated")
-    db.add(patch); db.commit(); db.refresh(patch)
-    result = _patch_public(patch)
-    result.update({"strategy": candidate.strategy, "rationale": candidate.rationale,
-                   "endpoint": {"method": endpoint.method, "path": endpoint.path} if endpoint else None,
-                   "review_required": True, "repository_modified": False})
-    return result
+        task_result = generate_patch_task.apply_async(kwargs={
+            "vulnerability_id": vulnerability.id,
+            "target_file_path": payload.target_file_path,
+            "encrypted_source_code": encrypt_secret(payload.source_code),
+            "organization_id": context.organization_id,
+            "authorization_header": encrypt_secret(authorization),
+            "db_dialect": payload.db_dialect,
+        })
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Unable to dispatch patch generation to the worker queue.") from exc
+    response = {"task_id": task_result.id, "status": task_result.state.lower(),
+                "vulnerability_id": vulnerability.id, "organization_id": context.organization_id,
+                "review_required": True}
+    if task_result.successful() and isinstance(task_result.result, dict):
+        response.update({"patch_id": task_result.result.get("patch_id"),
+                         "ai_confidence_score": task_result.result.get("ai_confidence_score"),
+                         "status": "completed"})
+    return response
+
+
+@app.get("/api/vulnerabilities/{vulnerability_id}/patches")
+def list_vulnerability_patches(vulnerability_id: int,
+                               context: WorkspaceContext = Depends(get_workspace_context),
+                               db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    require_permission(context, "vulnerabilities.read")
+    ensure_vulnerability_access(db, vulnerability_id, context)
+    patches = db.execute(select(CodePatch).where(CodePatch.vulnerability_id == vulnerability_id).order_by(CodePatch.created_at.desc())).scalars().all()
+    return [_patch_public(item) for item in patches]
+
+
+@app.get("/api/tasks/{task_id}")
+def get_background_task_status(task_id: str,
+                               context: WorkspaceContext = Depends(get_workspace_context)) -> dict[str, Any]:
+    from celery.result import AsyncResult
+    task_result = AsyncResult(task_id, app=celery_app)
+    response: dict[str, Any] = {"task_id": task_id, "status": task_result.state.lower()}
+    if task_result.successful():
+        result = task_result.result
+        if not isinstance(result, dict) or result.get("organization_id") != context.organization_id:
+            raise HTTPException(status_code=404, detail="Task not found in this workspace.")
+        response["result"] = result
+    elif task_result.failed():
+        # Worker tracebacks and exception details are kept out of API responses.
+        response["status"] = "failure"
+        response["error"] = "Background task failed."
+    return response
 
 
 @app.post("/api/patches/{patch_id}/review")

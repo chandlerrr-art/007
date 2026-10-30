@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -11,6 +12,7 @@ from app.ai.patcher import PatchGenerationError, generate_patch
 from app.auth.rbac import (ensure_target_access, issue_workspace_token, require_permission,
                            resolve_workspace_context)
 from app.db import Base, get_db
+from app.core.celery_app import celery_app
 from app.main import app
 from app.models import (CodePatch, DiscoveredVulnerability, Endpoint, Organization,
                         Target, VulnerabilityScan, WorkspaceUser)
@@ -119,12 +121,18 @@ class EnterprisePhase5Tests(unittest.TestCase):
         dev = {"Authorization": "Bearer " + issue_workspace_token("dev-a", self.org_a.id)}
         engineer = {"Authorization": "Bearer " + issue_workspace_token("engineer-a", self.org_a.id)}
         outsider = {"Authorization": "Bearer " + issue_workspace_token("dev-b", self.org_b.id)}
-        generated = self.client.post(f"/api/vulnerabilities/{self.vuln_a.id}/patch", headers=dev, json={
-            "target_file_path": "app/booking.py", "db_dialect": "sqlite",
-            "source_code": 'def find_booking(user_id):\n    return db.execute(f"SELECT * FROM bookings WHERE id = {user_id}")\n',
-        })
-        self.assertEqual(generated.status_code, 201, generated.text)
-        patch_id = generated.json()["id"]
+        previous_eager = celery_app.conf.task_always_eager
+        celery_app.conf.task_always_eager = True
+        try:
+            with patch("app.ai.patcher_tasks.SessionLocal", self.Session):
+                generated = self.client.post(f"/api/vulnerabilities/{self.vuln_a.id}/patch", headers=dev, json={
+                    "target_file_path": "app/booking.py", "db_dialect": "sqlite",
+                    "source_code": 'def find_booking(user_id):\n    return db.execute(f"SELECT * FROM bookings WHERE id = {user_id}")\n',
+                })
+        finally:
+            celery_app.conf.task_always_eager = previous_eager
+        self.assertEqual(generated.status_code, 202, generated.text)
+        patch_id = generated.json()["patch_id"]
         cross_tenant = self.client.post(f"/api/vulnerabilities/{self.vuln_b.id}/patch", headers=dev, json={
             "target_file_path": "app/routes.py", "source_code": "# 007:AUTHZ owner=obj.owner_id principal=user.id\n",
         })

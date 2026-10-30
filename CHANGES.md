@@ -220,3 +220,12 @@ services\api\tests\test_vulnerability_engine.py ............             [100%]
 - Enterprise API requests require `ENTERPRISE_AUTH_SECRET` and a trusted HS256 identity issuer when `ENTERPRISE_AUTH_ENABLED=true`; configure the secret in the environment and provision active workspace memberships before issuing tokens.
 - Added Phase 5 tests for diff format/confidence, model-provider validation, cross-workspace query isolation, permission denials, and review-gated application.
 - Verification: **71 API tests passed**; four pre-existing warnings remain.
+
+## Celery and Redis worker infrastructure
+
+- Added `app/core/celery_app.py` configured from `REDIS_URL`, JSON-only task/result encoding, late acknowledgements, worker prefetch of one, bounded scan/patch time limits, and separate scan/patch queues.
+- Added `run_scan_task` and `generate_patch_task` with isolated `SessionLocal` lifecycles, tenant and permission revalidation, scan-state persistence, and sanitized failures. Migration `0011_celery_task_tracking.py` stores patch task IDs for redelivery deduplication.
+- Refactored vulnerability scan and AI patch APIs to enqueue with `.apply_async()`. Workspace IDs and encrypted authorization headers are carried to workers; patch source is also encrypted before broker dispatch.
+- Added patch listing and task status endpoints for following background patch jobs.
+- Added Redis and Celery worker services to Docker Compose and added `celery[redis]` to API dependencies.
+- Added eager-mode worker tests for dispatch payloads, successful persistence, failure persistence, duplicate-delivery idempotency, queue configuration, and patch-generation failure handling.

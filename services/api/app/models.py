@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -293,7 +293,9 @@ class WorkspaceUser(Base):
 
 class CodePatch(Base):
     __tablename__ = "code_patches"
+    __table_args__ = (Index("ix_code_patches_celery_task_id", "celery_task_id", unique=True),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    celery_task_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     vulnerability_id: Mapped[int] = mapped_column(ForeignKey("discovered_vulnerabilities.id", ondelete="CASCADE"), nullable=False, index=True)
     target_file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
     unified_diff: Mapped[str] = mapped_column(Text(), nullable=False)
