@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import Link from "next/link";
 
 type PendingTest = {
   id: number;
@@ -467,7 +468,7 @@ export default function Dashboard() {
 
           <section className="card targets-card" id="targets"><div className="card-head"><div><h2>Authorized targets</h2><p>Registered application origins</p></div><button className="text-link button-link" onClick={() => setTargetFormOpen((open) => !open)}>{targetFormOpen ? "Close" : "＋ Add target"}</button></div>
             {targetFormOpen && <form className="target-form" onSubmit={createTarget}><label>Target name<input required minLength={2} maxLength={160} value={targetName} onChange={(event) => setTargetName(event.target.value)} placeholder="Staging environment"/></label><label>Base URL<input required type="url" value={targetUrl} onChange={(event) => setTargetUrl(event.target.value)} placeholder="http://staging-app:8080"/></label><label>Purpose<select value={targetEnvironment} onChange={(event) => setTargetEnvironment(event.target.value)}><option value="staging">Staging target (Authorized scan)</option><option value="local-demo">Local synthetic demo scan</option></select></label><button className="primary-button form-submit" type="submit">Add to scope</button><small>Only allowlisted origins are accepted. Staging targets enforce independent request budgets and review gates.</small></form>}
-            <div className="target-list">{data.targets.map((target) => <div className="target-row" key={target.id}><div className="target-icon">{target.name.slice(0, 1).toUpperCase()}</div><div className="target-info"><b>{target.name}</b><span>{target.base_url} ({target.environment})</span></div><label className="import-button">Import HAR<input type="file" accept=".har,application/json" onChange={(event) => { void importHar(target.id, event.target.files?.[0]); event.currentTarget.value = ""; }}/></label><span className={`authorized ${target.status}`}><i/>{target.status}</span></div>)}{!data.targets.length && <div className="empty">{loaded ? "No targets configured. Add an allowlisted origin to begin." : "Loading targets…"}</div>}</div>
+            <div className="target-list">{data.targets.map((target) => <div className="target-row" key={target.id}><div className="target-icon">{target.name.slice(0, 1).toUpperCase()}</div><div className="target-info"><b>{target.name}</b><span>{target.base_url} ({target.environment})</span></div><label className="import-button">Import HAR<input type="file" accept=".har,application/json" onChange={(event) => { void importHar(target.id, event.target.files?.[0]); event.currentTarget.value = ""; }}/></label><Link className="import-button" href={`/targets/${target.id}/import`}>Import OpenAPI</Link><span className={`authorized ${target.status}`}><i/>{target.status}</span></div>)}{!data.targets.length && <div className="empty">{loaded ? "No targets configured. Add an allowlisted origin to begin." : "Loading targets…"}</div>}</div>
             <div className="scope-note"><span aria-hidden="true">ⓘ</span><div><b>Scope is checked by the backend</b><p>Only explicitly allowlisted origins can be registered and scanned. Staging credentials and review states are strictly enforced.</p></div></div>
           </section>
         </div>
