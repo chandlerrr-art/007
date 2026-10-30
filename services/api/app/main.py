@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -43,6 +43,13 @@ from app.inventory.service import (
     infer_likely_owner,
     ingest_gateway_logs,
     normalize_endpoint_path,
+)
+from app.inventory.openapi_importer import (
+    MAX_SPEC_BYTES,
+    OpenAPIImportError,
+    fetch_openapi_spec,
+    ingest_openapi_spec,
+    parse_openapi_document,
 )
 from app.safety.credentials import (
     get_call_time_auth_headers,
@@ -349,6 +356,17 @@ class HARImportResponse(BaseModel):
     note: str
 
 
+class OpenAPIImportResponse(BaseModel):
+    target_id: int
+    discovered: int
+    inserted: int
+    updated: int
+    parameters_added: int
+    classification_counts: dict[str, int]
+    security_schemes: list[dict[str, str]]
+    note: str
+
+
 class GatewayLogImport(BaseModel):
     content: str = Field(max_length=10_000_000)
     window_days: int = Field(default=90, ge=1, le=365)
@@ -621,6 +639,54 @@ def import_har(target_id: int, payload: HARImport, db: Session = Depends(get_db)
         "inserted": inserted,
         "note": "Request headers, cookies, and query/body parameter names and types preserved under strict redaction rules (raw values discarded).",
     }
+
+
+@app.post("/api/targets/{target_id}/openapi-import", response_model=OpenAPIImportResponse)
+async def import_openapi(
+    target_id: int,
+    file: UploadFile | None = File(default=None),
+    spec_url: str | None = Form(default=None, max_length=2000),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Import an OpenAPI/Swagger document supplied by upload or same-origin URL."""
+    target = db.get(Target, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Target not found.")
+    if (file is None) == (not spec_url):
+        raise HTTPException(status_code=422, detail="Provide exactly one uploaded file or spec_url.")
+    try:
+        validate_target_url(target.base_url)
+        if file is not None:
+            raw = await file.read(MAX_SPEC_BYTES + 1)
+            filename = file.filename or "openapi.yaml"
+            if len(raw) > MAX_SPEC_BYTES:
+                raise OpenAPIImportError("Specification exceeds the 5 MB size limit.")
+        else:
+            raw, filename = fetch_openapi_spec(spec_url or "", target)
+        spec = parse_openapi_document(raw, filename)
+        result = ingest_openapi_spec(db, target_id, spec)
+    except ScopeRejected as exc:
+        db.rollback()
+        db.add(AuditEvent(event_type="openapi_import_denied", decision="deny", details="OpenAPI import rejected by target scope policy."))
+        db.commit()
+        raise HTTPException(status_code=422, detail="OpenAPI source is outside the authorized target scope.") from exc
+    except OpenAPIImportError as exc:
+        db.rollback()
+        db.add(AuditEvent(event_type="openapi_import_denied", decision="deny", details="OpenAPI import rejected because validation or safe parsing failed."))
+        db.commit()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    endpoints = classify_endpoints(db, target.id, window_days=90)
+    counts = {name: sum(endpoint.classification == name for endpoint in endpoints) for name in ("active", "zombie", "shadow")}
+    db.add(AuditEvent(event_type="openapi_imported", decision="allow",
+        details=f"Imported {result['discovered']} documented routes for target {target.name}; parameter values are not stored."))
+    db.commit()
+    result["classification_counts"] = counts
+    result["note"] = "OpenAPI routes were classified against observed traffic; only parameter names and inferred types were stored."
+    return result
 
 
 @app.post("/api/targets/{target_id}/gateway-logs", response_model=GatewayLogImportResponse)
