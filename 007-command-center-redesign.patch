@@ -1,0 +1,287 @@
+diff --git a/apps/web/app/globals.css b/apps/web/app/globals.css
+index 7661829..e740c86 100644
+--- a/apps/web/app/globals.css
++++ b/apps/web/app/globals.css
+@@ -419,3 +419,127 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
+ @media (prefers-reduced-motion: reduce) {
+   .orbit-ring, .opening-progress-bar, .opening-content, .login-form-wrap { animation: none !important; }
+ }
++
++/* Command center — structural dashboard redesign */
++.operations-shell .sidebar { width: 264px; padding: 24px 16px 18px; }
++.operations-shell .content { margin-left: 264px; }
++.operations-shell .brand { height: 44px; gap: 12px; padding: 0 6px; }
++.operations-shell .brand-mark { width: 42px; height: 42px; border-radius: 12px; font-size: 12px; letter-spacing: -.06em; }
++.operations-shell .brand-copy { display: grid; gap: 2px; }
++.operations-shell .brand-copy strong { color: #f2f6f5; font-size: 11px; letter-spacing: .13em; }
++.operations-shell .brand-copy small { color: #536269; font-size: 7px; letter-spacing: .22em; }
++.operations-shell .workspace-switcher { display: grid; grid-template-columns: 30px 1fr 14px; align-items: center; gap: 9px; margin-top: 28px; padding: 10px; border: 1px solid #1b272d; border-radius: 10px; background: #0c1317; color: #718087; }
++.operations-shell .workspace-logo { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 8px; background: #202c31; color: #d8e0e2; font-size: 10px; font-weight: 800; }
++.operations-shell .workspace-switcher small, .operations-shell .workspace-switcher b { display: block; }
++.operations-shell .workspace-switcher small { margin-bottom: 3px; color: #4d5b61; font-size: 7px; letter-spacing: .13em; }
++.operations-shell .workspace-switcher b { color: #aeb9bd; font-size: 9px; font-weight: 600; }
++.operations-shell .primary-nav { margin-top: 22px; }
++.operations-shell .nav-label { margin: 0 11px 9px; color: #435159; font-size: 7px; letter-spacing: .18em; }
++.operations-shell .nav-label.second { margin-top: 25px; }
++.operations-shell .nav-item { min-height: 41px; gap: 11px; margin: 3px 0; padding: 0 11px; border: 1px solid transparent; border-radius: 8px; color: #718087; font-size: 10px; }
++.operations-shell .nav-item svg { flex: 0 0 auto; color: #53636b; }
++.operations-shell .nav-item.active { border-color: #b9f64b15; background: linear-gradient(90deg, #b9f64b13, #b9f64b05); }
++.operations-shell .nav-item.active svg { color: var(--blue); }
++.operations-shell .nav-count { display: grid; min-width: 20px; height: 20px; place-items: center; border-radius: 6px; background: #151f24; color: #7f8d93; font-size: 8px; }
++.operations-shell .alert-count { background: #f4b95f17; color: #e9b961; }
++.operations-shell .engine-card { padding: 13px; border: 1px solid #1e2b30; border-radius: 11px; background: linear-gradient(145deg, #111b1f, #0b1215); }
++.operations-shell .engine-card-head { display: flex; align-items: center; gap: 8px; color: #bdc7c9; font-size: 9px; font-weight: 700; text-transform: uppercase; }
++.operations-shell .engine-card-head svg { color: var(--blue); }
++.operations-shell .engine-card-head i { width: 6px; height: 6px; margin-left: auto; border-radius: 50%; background: var(--blue); box-shadow: 0 0 9px #b9f64b; }
++.operations-shell .engine-card p { margin: 8px 0 10px; color: #617077; font-size: 8px; line-height: 1.45; }
++.operations-shell .engine-meter { height: 3px; overflow: hidden; border-radius: 4px; background: #1b282d; }
++.operations-shell .engine-meter span { display: block; width: 88%; height: 100%; background: var(--blue); }
++.operations-shell .engine-card.halted .engine-card-head svg, .operations-shell .engine-card.halted .engine-card-head i { color: #ff8178; background: #ff8178; }
++.operations-shell .engine-card.halted .engine-meter span { width: 16%; background: #ff8178; }
++.operations-shell .user-row { margin-top: 12px; }
++.operations-shell .user-chevron { margin-left: auto; color: #536269; }
++.operations-shell .topbar { height: 70px; padding: 0 34px; }
++.operations-shell .topbar-title span, .operations-shell .topbar-title b { display: block; }
++.operations-shell .topbar-title span { margin-bottom: 3px; color: #536269; font-size: 8px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
++.operations-shell .topbar-title b { color: #dbe2e4; font-size: 12px; font-weight: 600; }
++.operations-shell .service-health { display: flex; align-items: center; gap: 14px; padding-right: 5px; }
++.operations-shell .service-health span { display: flex; align-items: center; gap: 5px; color: #607078; font-size: 7px; font-weight: 800; letter-spacing: .1em; }
++.operations-shell .service-health i { width: 5px; height: 5px; border-radius: 50%; background: #ff8178; }
++.operations-shell .service-health .online i { background: var(--blue); box-shadow: 0 0 7px #b9f64b; }
++.operations-shell .icon-button { position: relative; display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid #253239; border-radius: 8px; background: #10181d; color: #78878e; }
++.operations-shell .notification-dot { position: absolute; top: 7px; right: 7px; width: 5px; height: 5px; border: 1px solid #10181d; border-radius: 50%; background: #ff8178; }
++.operations-shell .kill-button { height: 34px; border-color: #542d2c; border-radius: 8px; background: #291819; color: #ff928a; }
++.operations-shell .page-wrap { max-width: 1640px; padding: 30px 34px 24px; }
++.operations-shell .command-hero { position: relative; display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(320px, .55fr); gap: 22px; margin-bottom: 26px; overflow: hidden; }
++.operations-shell .hero-copy { position: relative; overflow: hidden; min-height: 310px; padding: clamp(30px, 4vw, 52px); border: 1px solid #1d2b30; border-radius: 17px; background: radial-gradient(circle at 78% 30%, #b9f64b14, transparent 28%), linear-gradient(135deg, #111a1f, #0b1216); }
++.operations-shell .hero-copy::after { position: absolute; right: -100px; bottom: -190px; width: 390px; height: 390px; border: 1px solid #b9f64b20; border-radius: 50%; box-shadow: 0 0 0 55px #b9f64b08, 0 0 0 110px #b9f64b04; content: ""; }
++.operations-shell .hero-copy > * { position: relative; z-index: 1; }
++.operations-shell .eyebrow { display: flex; align-items: center; gap: 9px; color: #75868b; font-size: 8px; letter-spacing: .18em; }
++.operations-shell .hero-copy h1 { max-width: 680px; margin: 20px 0 15px; font-size: clamp(38px, 4.2vw, 61px); font-weight: 600; line-height: .98; letter-spacing: -.055em; }
++.operations-shell .hero-copy h1 em { color: var(--blue); font-style: normal; }
++.operations-shell .hero-copy > p { max-width: 570px; margin: 0; color: #77868c; font-size: 12px; line-height: 1.65; }
++.operations-shell .hero-actions { display: flex; align-items: end; gap: 16px; margin-top: 30px; }
++.operations-shell .hero-scan { display: inline-flex; height: 42px; align-items: center; gap: 8px; border-radius: 8px; }
++.operations-shell .hero-scope { display: flex; align-items: center; gap: 6px; height: 42px; color: #61716f; font-size: 8px; font-weight: 700; white-space: nowrap; }
++.operations-shell .hero-scope svg { color: #8ba756; }
++.operations-shell .posture-card { display: flex; min-height: 310px; flex-direction: column; padding: 22px; border: 1px solid #1d2b30; border-radius: 17px; background: linear-gradient(145deg, #10191e, #0c1317); }
++.operations-shell .posture-card-head { display: flex; align-items: center; justify-content: space-between; color: #77868c; font-size: 8px; font-weight: 800; letter-spacing: .12em; }
++.operations-shell .posture-card-head span { display: flex; align-items: center; gap: 7px; }
++.operations-shell .posture-card-head b { padding: 4px 6px; border-radius: 4px; background: #b9f64b12; color: #a6ca60; font-size: 7px; }
++.operations-shell .posture-gauge { display: grid; width: 154px; height: 154px; margin: 24px auto; place-items: center; border-radius: 50%; transform: rotate(-35deg); }
++.operations-shell .posture-gauge::before { position: absolute; width: 126px; height: 126px; border-radius: 50%; background: #0f171b; content: ""; }
++.operations-shell .posture-gauge > div { position: relative; display: grid; text-align: center; transform: rotate(35deg); }
++.operations-shell .posture-gauge strong { color: #ecf0ef; font-size: 40px; line-height: 1; letter-spacing: -.06em; }
++.operations-shell .posture-gauge span { color: #58676d; font-size: 9px; }
++.operations-shell .posture-gauge small { margin-top: 5px; color: var(--blue); font-size: 8px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
++.operations-shell .posture-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: auto; }
++.operations-shell .posture-stats > div { display: flex; align-items: center; gap: 7px; padding: 9px 7px; border: 1px solid #1d2a30; border-radius: 8px; color: #64737a; }
++.operations-shell .posture-stats svg { color: #839248; }
++.operations-shell .posture-stats span { font-size: 7px; }
++.operations-shell .posture-stats b { display: block; margin-bottom: 2px; color: #cbd3d5; font-size: 11px; }
++.operations-shell .command-section-heading { align-items: center; margin: 4px 0 12px; }
++.operations-shell .command-section-heading > div:first-child { display: grid; grid-template-columns: 24px auto; column-gap: 8px; }
++.operations-shell .section-index { grid-row: 1 / 3; color: var(--blue); font-size: 8px; font-weight: 800; letter-spacing: .1em; }
++.operations-shell .command-section-heading h2 { margin: 0; font-size: 13px; }
++.operations-shell .command-section-heading p { margin-top: 3px; }
++.operations-shell .command-metrics { gap: 12px; margin-bottom: 18px; }
++.operations-shell .metric-card { min-height: 154px; padding: 16px; }
++.operations-shell .metric-top { display: flex; align-items: center; gap: 10px; }
++.operations-shell .metric-top .metric-icon { width: 34px; height: 34px; margin: 0; }
++.operations-shell .metric-top .metric-label { position: static; color: #718087; font-size: 8px; }
++.operations-shell .metric-top button { margin-left: auto; border: 0; background: none; color: #46555c; font-size: 14px; }
++.operations-shell .metric-body { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-top: 20px; }
++.operations-shell .metric-detail { font-size: 8px; }
++.operations-shell .metric-spark { display: flex; height: 42px; align-items: end; gap: 4px; }
++.operations-shell .metric-spark i { display: block; width: 5px; min-height: 4px; border-radius: 3px 3px 1px 1px; background: #b9f64b35; }
++.operations-shell .metric-red .metric-spark i { background: #ff81783d; }
++.operations-shell .metric-violet .metric-spark i { background: #a78bfa3d; }
++.operations-shell .review-card { margin-bottom: 18px; }
++
++@media (max-width: 1180px) {
++  .operations-shell .sidebar { width: 218px; }
++  .operations-shell .content { margin-left: 218px; }
++  .operations-shell .command-hero { grid-template-columns: 1fr; }
++  .operations-shell .posture-card { display: grid; min-height: 0; grid-template-columns: 1fr 180px 1.2fr; align-items: center; }
++  .operations-shell .posture-gauge { width: 126px; height: 126px; margin: 0 auto; }
++  .operations-shell .posture-gauge::before { width: 104px; height: 104px; }
++}
++@media (max-width: 760px) {
++  .operations-shell .sidebar { width: 68px; padding: 14px 8px; }
++  .operations-shell .content { margin-left: 68px; }
++  .operations-shell .brand-copy, .operations-shell .workspace-switcher, .operations-shell .nav-label, .operations-shell .nav-item:not(.active), .operations-shell .engine-card, .operations-shell .user-row > div:not(.avatar), .operations-shell .user-chevron { display: none; }
++  .operations-shell .brand { justify-content: center; }
++  .operations-shell .brand-mark { width: 38px; height: 38px; }
++  .operations-shell .primary-nav { margin-top: 28px; }
++  .operations-shell .nav-item.active { display: flex; justify-content: center; padding: 0; font-size: 0; }
++  .operations-shell .nav-item.active svg { width: 18px; }
++  .operations-shell .service-health { display: none; }
++  .operations-shell .topbar { padding: 0 14px; }
++  .operations-shell .topbar-title span { display: none; }
++  .operations-shell .kill-button { font-size: 0; }
++  .operations-shell .kill-button svg { margin: 0; }
++  .operations-shell .page-wrap { padding: 18px 12px; }
++  .operations-shell .hero-copy { min-height: 330px; padding: 26px 22px; }
++  .operations-shell .hero-copy h1 { font-size: 37px; }
++  .operations-shell .hero-actions { align-items: flex-start; flex-direction: column; gap: 4px; }
++  .operations-shell .posture-card { display: flex; }
++  .operations-shell .posture-gauge { width: 140px; height: 140px; margin: 22px auto; }
++  .operations-shell .posture-gauge::before { width: 116px; height: 116px; }
++  .operations-shell .command-metrics { grid-template-columns: 1fr; }
++  .operations-shell .metric-card { min-height: 136px; }
++}
+diff --git a/apps/web/app/ui/dashboard.tsx b/apps/web/app/ui/dashboard.tsx
+index c271e92..639badd 100644
+--- a/apps/web/app/ui/dashboard.tsx
++++ b/apps/web/app/ui/dashboard.tsx
+@@ -2,6 +2,11 @@
+ 
+ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+ import Link from "next/link";
++import {
++  Activity, AlertTriangle, Bell, ChevronDown, CircleDot, Crosshair, Database,
++  FileSearch, Gauge, LayoutDashboard, Radar, RefreshCw, ScanLine, ShieldCheck,
++  Square, Target, UsersRound, Zap,
++} from "lucide-react";
+ 
+ type PendingTest = {
+   id: number;
+@@ -310,65 +315,93 @@ export default function Dashboard() {
+   const pendingFindings = data.findings.filter((f) => f.status === "pending_review");
+   const pendingTests = data.pending_tests ?? [];
+   const hasReviewQueue = pendingFindings.length > 0 || pendingTests.length > 0;
++  const openFindings = Object.values(data.severity).reduce((total, value) => total + value, 0);
++  const riskScore = Math.max(12, 100 - (data.severity.critical ?? 0) * 18 - (data.severity.high ?? 0) * 9 - (data.severity.medium ?? 0) * 4 - (data.severity.low ?? 0));
++  const postureLabel = riskScore >= 85 ? "Strong" : riskScore >= 65 ? "Guarded" : "At risk";
+ 
+   return <main className="shell operations-shell">
+     <aside className="sidebar">
+-      <a className="brand" href="#overview" aria-label="007 dashboard home"><span className="brand-mark">0</span><span>007</span></a>
+-      <div className="nav-label">WORKSPACE</div>
+-      <a className="nav-item active" href="#overview" title="Overview"><span aria-hidden="true">◫</span> Overview</a>
+-      <a className="nav-item" href="#scans" title="Scans"><span aria-hidden="true">◉</span> Scans <span className="nav-count">{data.summary.active_scans}</span></a>
+-      <a className="nav-item" href="#findings" title="Findings"><span aria-hidden="true">⚑</span> Findings</a>
+-      {hasReviewQueue && <a className="nav-item" href="#review-queue" title="Review Queue"><span aria-hidden="true">⚖</span> Review Queue <span className="nav-count">{pendingFindings.length + pendingTests.length}</span></a>}
+-      <a className="nav-item" href="#targets" title="Targets"><span aria-hidden="true">◎</span> Targets</a>
+-      <a className="nav-item" href="#changes" title="Changes"><span aria-hidden="true">↻</span> Changes</a>
++      <a className="brand" href="#overview" aria-label="007 command center home">
++        <span className="brand-mark">07</span>
++        <span className="brand-copy"><strong>ZERO SEVEN</strong><small>SECURITY OPS</small></span>
++      </a>
++      <div className="workspace-switcher"><span className="workspace-logo">A</span><span><small>WORKSPACE</small><b>Acme Security</b></span><ChevronDown size={14} /></div>
++      <nav className="primary-nav" aria-label="Workspace navigation">
++        <div className="nav-label">COMMAND</div>
++        <a className="nav-item active" href="#overview"><LayoutDashboard size={17} /> Overview</a>
++        <a className="nav-item" href="#scans"><Radar size={17} /> Scans <span className="nav-count">{data.summary.active_scans}</span></a>
++        <a className="nav-item" href="#findings"><FileSearch size={17} /> Findings <span className="nav-count">{openFindings}</span></a>
++        {hasReviewQueue && <a className="nav-item review-nav" href="#review-queue"><UsersRound size={17} /> Review queue <span className="nav-count alert-count">{pendingFindings.length + pendingTests.length}</span></a>}
++        <div className="nav-label second">MANAGE</div>
++        <a className="nav-item" href="#targets"><Target size={17} /> Attack surface</a>
++        <a className="nav-item" href="#changes"><Activity size={17} /> Change events</a>
++      </nav>
+       <div className="sidebar-bottom">
+-        <div className={`safety-chip ${data.safety.kill_switch_engaged ? "halted" : ""}`}>
+-          <span className="pulse"/> SAFETY ENGINE <b>{data.safety.kill_switch_engaged ? "HALTED" : "READY"}</b>
++        <div className={`engine-card ${data.safety.kill_switch_engaged ? "halted" : ""}`}>
++          <div className="engine-card-head"><ShieldCheck size={16} /><span>Safety engine</span><i /></div>
++          <p>{data.safety.kill_switch_engaged ? "All scanning activity is paused." : "Policy guardrails are enforced."}</p>
++          <div className="engine-meter"><span /></div>
+         </div>
+-        <div className="user-row"><div className="avatar">SF</div><div><strong>Security team</strong><small>Authorized reviewer</small></div><span className="dots">•••</span></div>
++        <div className="user-row"><div className="avatar">SF</div><div><strong>Security team</strong><small>Authorized reviewer</small></div><ChevronDown className="user-chevron" size={14} /></div>
+       </div>
+     </aside>
+ 
+     <section className="content" id="overview">
+       <header className="topbar">
+-        <div className="breadcrumbs">Workspace <span>/</span> <b>Overview</b></div>
++        <div className="topbar-title"><span>Command center</span><b>Overview</b></div>
+         <div className="top-actions">
+-          <span className="env-pill"><i/> LOCAL &amp; STAGING</span>
+-          <span className={`api-pill ${apiConnected ? "connected" : loaded ? "disconnected" : "checking"}`}><i/>{apiConnected ? "API ONLINE" : loaded ? "API OFFLINE" : "CONNECTING"}</span>
+-          <span className={`api-pill db-pill ${databaseConnected ? "connected" : loaded && health ? "disconnected" : "checking"}`}><i/>{databaseConnected ? "DB ONLINE" : health ? "DB OFFLINE" : "DB CHECKING"}</span>
++          <div className="service-health">
++            <span className={apiConnected ? "online" : "offline"}><i /> API</span>
++            <span className={databaseConnected ? "online" : "offline"}><i /> DATABASE</span>
++          </div>
++          <button className="icon-button" aria-label="Notifications"><Bell size={16} /><span className="notification-dot" /></button>
+           <button className={`kill-button ${data.safety.kill_switch_engaged ? "engaged" : ""}`} onClick={toggleKillSwitch} aria-pressed={data.safety.kill_switch_engaged}>
+-            <span aria-hidden="true">{data.safety.kill_switch_engaged ? "■" : "Ⅱ"}</span>{data.safety.kill_switch_engaged ? "Resume scans" : "Stop scans"}
++            {data.safety.kill_switch_engaged ? <Zap size={14} /> : <Square size={13} />}{data.safety.kill_switch_engaged ? "Resume engine" : "Emergency stop"}
+           </button>
+-          <div className="avatar small" aria-label="Security team">SF</div>
+         </div>
+       </header>
+ 
+       <div className="page-wrap">
+-        <div className="welcome">
+-          <div><div className="eyebrow">LOCAL &amp; STAGING SECURITY OPERATIONS <span className={`live-dot ${apiConnected ? "" : "offline"}`}/> SYSTEM STATUS</div>
+-            <h1>Security overview</h1>
+-            <p>Monitor authorized scan activity, staging guardrails, and human review gates.</p>
++        <section className="command-hero">
++          <div className="hero-copy">
++            <div className="eyebrow"><span className={`live-dot ${apiConnected ? "" : "offline"}`} /> LIVE SECURITY POSTURE</div>
++            <h1>Know what changed.<br /><em>Act before it matters.</em></h1>
++            <p>One operational view across your attack surface, verified findings, and human approval gates.</p>
++            <div className="hero-actions">
++              <div className="scan-controls">
++                {scanTargets.length > 1 && <label className="scan-target-select"><span>SCAN TARGET</span><select aria-label="Select an authorized scan target" value={selectedTarget?.id ?? ""} onChange={(event) => setSelectedTargetId(Number(event.target.value))}>{scanTargets.map((target) => <option value={target.id} key={target.id}>{target.name}</option>)}</select></label>}
++                <button className="primary-button hero-scan" onClick={startScan} disabled={busy || !selectedTarget || data.safety.kill_switch_engaged} title={data.safety.kill_switch_engaged ? "Clear the safety stop to start a scan" : selectedTarget ? `Run bounded checks against ${selectedTarget.name}` : "Add or authorize an allowlisted target to enable scans"}>
++                  <ScanLine size={16} />{busy ? "Launching scan…" : "Launch new scan"}
++                </button>
++              </div>
++              <span className="hero-scope"><ShieldCheck size={14} /> Authorized scope only</span>
++            </div>
+           </div>
+-          <div className="scan-controls">
+-            {scanTargets.length > 1 && <label className="scan-target-select"><span>Scan target</span><select aria-label="Select an authorized scan target" value={selectedTarget?.id ?? ""} onChange={(event) => setSelectedTargetId(Number(event.target.value))}>{scanTargets.map((target) => <option value={target.id} key={target.id}>{target.name} ({target.environment})</option>)}</select></label>}
+-            <button className="primary-button" onClick={startScan} disabled={busy || !selectedTarget || data.safety.kill_switch_engaged} title={data.safety.kill_switch_engaged ? "Clear the safety stop to start a scan" : selectedTarget ? `Run bounded checks against ${selectedTarget.name}` : "Add or authorize an allowlisted target to enable scans"}>
+-              <span aria-hidden="true">＋</span>{busy ? "Starting…" : "New scan"}
+-            </button>
++          <div className="posture-card">
++            <div className="posture-card-head"><span><Gauge size={15} /> POSTURE SCORE</span><b>LIVE</b></div>
++            <div className="posture-gauge" style={{ background: `conic-gradient(var(--blue) ${riskScore * 3.6}deg, #243037 0deg)` }}>
++              <div><strong>{riskScore}</strong><span>/ 100</span><small>{postureLabel}</small></div>
++            </div>
++            <div className="posture-stats">
++              <div><AlertTriangle size={14} /><span><b>{data.severity.critical ?? 0}</b>Critical</span></div>
++              <div><CircleDot size={14} /><span><b>{openFindings}</b>Open</span></div>
++              <div><Crosshair size={14} /><span><b>{data.summary.targets}</b>In scope</span></div>
++            </div>
+           </div>
+-        </div>
++        </section>
+ 
+         {loadError && <div className="alert" role="alert"><span className="alert-icon">!</span><div><b>Workspace connection issue</b><p>{loadError} Check that the API and database services are running.</p></div><button className="inline-button" onClick={() => void refreshDashboard(true)}>Retry</button></div>}
+         {actionError && <div className="alert" role="alert"><span className="alert-icon">!</span><div><b>Action could not be completed</b><p>{actionError}</p></div><button className="dismiss-button" aria-label="Dismiss error" onClick={() => setActionError("")}>×</button></div>}
+         {notice && <div className="notice" role="status"><span aria-hidden="true">✓</span><p>{notice}</p><button className="dismiss-button" aria-label="Dismiss notice" onClick={() => setNotice("")}>×</button></div>}
+         {data.safety.kill_switch_engaged && <div className="halt-banner" role="status"><span aria-hidden="true">Ⅱ</span><div><b>Safety stop is engaged</b><p>{data.safety.reason || "New scans are blocked until you resume scan activity."}</p></div></div>}
+ 
+-        <div className="section-heading"><div><h2>At a glance</h2><p>Live summary from your 007 workspace</p></div><div className="heading-actions"><span className="refresh-note"><i className={refreshing ? "spin" : ""} aria-hidden="true">↻</i>{updatedLabel}</span><button className="refresh-button" onClick={() => void refreshDashboard(true)} disabled={refreshing} aria-label="Refresh dashboard" title="Refresh dashboard">↻</button></div></div>
++        <div className="section-heading command-section-heading"><div><span className="section-index">01</span><h2>Operational pulse</h2><p>What needs your attention right now</p></div><div className="heading-actions"><span className="refresh-note">{updatedLabel}</span><button className="refresh-button" onClick={() => void refreshDashboard(true)} disabled={refreshing} aria-label="Refresh dashboard"><RefreshCw className={refreshing ? "spin" : ""} size={14} /></button></div></div>
+ 
+-        <div className="metric-grid">
+-          <Metric label="ACTIVE SCANS" value={data.summary.active_scans} icon="◉" tone="blue" detail="Queued or running" />
+-          <Metric label="VERIFIED FINDINGS" value={data.summary.verified_findings} icon="⚑" tone="red" detail="Independently confirmed" />
+-          <Metric label="PENDING REVIEW" value={(data.summary.pending_reviews ?? 0)} icon="⚖" tone="amber" detail="Human approval gates" />
+-          <Metric label="AUTHORIZED TARGETS" value={data.summary.targets} icon="◎" tone="green" detail="Allowlist validated" />
++        <div className="metric-grid command-metrics">
++          <Metric label="ACTIVE SCANS" value={data.summary.active_scans} icon={<Radar size={18} />} tone="blue" detail="Running now" bars={[42, 68, 48, 82, 58]} />
++          <Metric label="VERIFIED RISKS" value={data.summary.verified_findings} icon={<AlertTriangle size={18} />} tone="red" detail="Confirmed findings" bars={[70, 58, 76, 45, 62]} />
++          <Metric label="REVIEW QUEUE" value={(data.summary.pending_reviews ?? 0)} icon={<UsersRound size={18} />} tone="violet" detail="Awaiting decision" bars={[28, 45, 38, 60, 72]} />
++          <Metric label="ENDPOINTS" value={data.summary.endpoints} icon={<Database size={18} />} tone="green" detail={`${data.summary.targets} authorized targets`} bars={[32, 44, 57, 68, 86]} />
+         </div>
+ 
+         {/* Human Review Queue Card */}
+@@ -484,6 +517,9 @@ export default function Dashboard() {
+   </main>;
+ }
+ 
+-function Metric({ label, value, icon, tone, detail }: { label: string; value: number; icon: string; tone: string; detail: string }) {
+-  return <article className="metric-card"><div className={`metric-icon ${tone}`} aria-hidden="true">{icon}</div><div className="metric-label">{label}</div><div className="metric-value">{value.toLocaleString()}</div><div className="metric-detail">{detail}</div><div className={`metric-accent ${tone}`}/></article>;
++function Metric({ label, value, icon, tone, detail, bars }: { label: string; value: number; icon: React.ReactNode; tone: string; detail: string; bars: number[] }) {
++  return <article className={`metric-card metric-${tone}`}>
++    <div className="metric-top"><div className={`metric-icon ${tone}`} aria-hidden="true">{icon}</div><div className="metric-label">{label}</div><button aria-label={`View ${label.toLowerCase()}`}>↗</button></div>
++    <div className="metric-body"><div><div className="metric-value">{value.toLocaleString()}</div><div className="metric-detail">{detail}</div></div><div className="metric-spark" aria-hidden="true">{bars.map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div></div>
++  </article>;
+ }

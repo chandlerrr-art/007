@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
+import {
+  Activity, AlertTriangle, Bell, ChevronDown, CircleDot, Crosshair, Database,
+  FileSearch, Gauge, LayoutDashboard, Radar, RefreshCw, ScanLine, ShieldCheck,
+  Square, Target, UsersRound, Zap,
+} from "lucide-react";
 
 type PendingTest = {
   id: number;
@@ -310,65 +315,93 @@ export default function Dashboard() {
   const pendingFindings = data.findings.filter((f) => f.status === "pending_review");
   const pendingTests = data.pending_tests ?? [];
   const hasReviewQueue = pendingFindings.length > 0 || pendingTests.length > 0;
+  const openFindings = Object.values(data.severity).reduce((total, value) => total + value, 0);
+  const riskScore = Math.max(12, 100 - (data.severity.critical ?? 0) * 18 - (data.severity.high ?? 0) * 9 - (data.severity.medium ?? 0) * 4 - (data.severity.low ?? 0));
+  const postureLabel = riskScore >= 85 ? "Strong" : riskScore >= 65 ? "Guarded" : "At risk";
 
   return <main className="shell operations-shell">
     <aside className="sidebar">
-      <a className="brand" href="#overview" aria-label="007 dashboard home"><span className="brand-mark">0</span><span>007</span></a>
-      <div className="nav-label">WORKSPACE</div>
-      <a className="nav-item active" href="#overview" title="Overview"><span aria-hidden="true">◫</span> Overview</a>
-      <a className="nav-item" href="#scans" title="Scans"><span aria-hidden="true">◉</span> Scans <span className="nav-count">{data.summary.active_scans}</span></a>
-      <a className="nav-item" href="#findings" title="Findings"><span aria-hidden="true">⚑</span> Findings</a>
-      {hasReviewQueue && <a className="nav-item" href="#review-queue" title="Review Queue"><span aria-hidden="true">⚖</span> Review Queue <span className="nav-count">{pendingFindings.length + pendingTests.length}</span></a>}
-      <a className="nav-item" href="#targets" title="Targets"><span aria-hidden="true">◎</span> Targets</a>
-      <a className="nav-item" href="#changes" title="Changes"><span aria-hidden="true">↻</span> Changes</a>
+      <a className="brand" href="#overview" aria-label="007 command center home">
+        <span className="brand-mark">07</span>
+        <span className="brand-copy"><strong>ZERO SEVEN</strong><small>SECURITY OPS</small></span>
+      </a>
+      <div className="workspace-switcher"><span className="workspace-logo">A</span><span><small>WORKSPACE</small><b>Acme Security</b></span><ChevronDown size={14} /></div>
+      <nav className="primary-nav" aria-label="Workspace navigation">
+        <div className="nav-label">COMMAND</div>
+        <a className="nav-item active" href="#overview"><LayoutDashboard size={17} /> Overview</a>
+        <a className="nav-item" href="#scans"><Radar size={17} /> Scans <span className="nav-count">{data.summary.active_scans}</span></a>
+        <a className="nav-item" href="#findings"><FileSearch size={17} /> Findings <span className="nav-count">{openFindings}</span></a>
+        {hasReviewQueue && <a className="nav-item review-nav" href="#review-queue"><UsersRound size={17} /> Review queue <span className="nav-count alert-count">{pendingFindings.length + pendingTests.length}</span></a>}
+        <div className="nav-label second">MANAGE</div>
+        <a className="nav-item" href="#targets"><Target size={17} /> Attack surface</a>
+        <a className="nav-item" href="#changes"><Activity size={17} /> Change events</a>
+      </nav>
       <div className="sidebar-bottom">
-        <div className={`safety-chip ${data.safety.kill_switch_engaged ? "halted" : ""}`}>
-          <span className="pulse"/> SAFETY ENGINE <b>{data.safety.kill_switch_engaged ? "HALTED" : "READY"}</b>
+        <div className={`engine-card ${data.safety.kill_switch_engaged ? "halted" : ""}`}>
+          <div className="engine-card-head"><ShieldCheck size={16} /><span>Safety engine</span><i /></div>
+          <p>{data.safety.kill_switch_engaged ? "All scanning activity is paused." : "Policy guardrails are enforced."}</p>
+          <div className="engine-meter"><span /></div>
         </div>
-        <div className="user-row"><div className="avatar">SF</div><div><strong>Security team</strong><small>Authorized reviewer</small></div><span className="dots">•••</span></div>
+        <div className="user-row"><div className="avatar">SF</div><div><strong>Security team</strong><small>Authorized reviewer</small></div><ChevronDown className="user-chevron" size={14} /></div>
       </div>
     </aside>
 
     <section className="content" id="overview">
       <header className="topbar">
-        <div className="breadcrumbs">Workspace <span>/</span> <b>Overview</b></div>
+        <div className="topbar-title"><span>Command center</span><b>Overview</b></div>
         <div className="top-actions">
-          <span className="env-pill"><i/> LOCAL &amp; STAGING</span>
-          <span className={`api-pill ${apiConnected ? "connected" : loaded ? "disconnected" : "checking"}`}><i/>{apiConnected ? "API ONLINE" : loaded ? "API OFFLINE" : "CONNECTING"}</span>
-          <span className={`api-pill db-pill ${databaseConnected ? "connected" : loaded && health ? "disconnected" : "checking"}`}><i/>{databaseConnected ? "DB ONLINE" : health ? "DB OFFLINE" : "DB CHECKING"}</span>
+          <div className="service-health">
+            <span className={apiConnected ? "online" : "offline"}><i /> API</span>
+            <span className={databaseConnected ? "online" : "offline"}><i /> DATABASE</span>
+          </div>
+          <button className="icon-button" aria-label="Notifications"><Bell size={16} /><span className="notification-dot" /></button>
           <button className={`kill-button ${data.safety.kill_switch_engaged ? "engaged" : ""}`} onClick={toggleKillSwitch} aria-pressed={data.safety.kill_switch_engaged}>
-            <span aria-hidden="true">{data.safety.kill_switch_engaged ? "■" : "Ⅱ"}</span>{data.safety.kill_switch_engaged ? "Resume scans" : "Stop scans"}
+            {data.safety.kill_switch_engaged ? <Zap size={14} /> : <Square size={13} />}{data.safety.kill_switch_engaged ? "Resume engine" : "Emergency stop"}
           </button>
-          <div className="avatar small" aria-label="Security team">SF</div>
         </div>
       </header>
 
       <div className="page-wrap">
-        <div className="welcome">
-          <div><div className="eyebrow">LOCAL &amp; STAGING SECURITY OPERATIONS <span className={`live-dot ${apiConnected ? "" : "offline"}`}/> SYSTEM STATUS</div>
-            <h1>Security overview</h1>
-            <p>Monitor authorized scan activity, staging guardrails, and human review gates.</p>
+        <section className="command-hero">
+          <div className="hero-copy">
+            <div className="eyebrow"><span className={`live-dot ${apiConnected ? "" : "offline"}`} /> LIVE SECURITY POSTURE</div>
+            <h1>Know what changed.<br /><em>Act before it matters.</em></h1>
+            <p>One operational view across your attack surface, verified findings, and human approval gates.</p>
+            <div className="hero-actions">
+              <div className="scan-controls">
+                {scanTargets.length > 1 && <label className="scan-target-select"><span>SCAN TARGET</span><select aria-label="Select an authorized scan target" value={selectedTarget?.id ?? ""} onChange={(event) => setSelectedTargetId(Number(event.target.value))}>{scanTargets.map((target) => <option value={target.id} key={target.id}>{target.name}</option>)}</select></label>}
+                <button className="primary-button hero-scan" onClick={startScan} disabled={busy || !selectedTarget || data.safety.kill_switch_engaged} title={data.safety.kill_switch_engaged ? "Clear the safety stop to start a scan" : selectedTarget ? `Run bounded checks against ${selectedTarget.name}` : "Add or authorize an allowlisted target to enable scans"}>
+                  <ScanLine size={16} />{busy ? "Launching scan…" : "Launch new scan"}
+                </button>
+              </div>
+              <span className="hero-scope"><ShieldCheck size={14} /> Authorized scope only</span>
+            </div>
           </div>
-          <div className="scan-controls">
-            {scanTargets.length > 1 && <label className="scan-target-select"><span>Scan target</span><select aria-label="Select an authorized scan target" value={selectedTarget?.id ?? ""} onChange={(event) => setSelectedTargetId(Number(event.target.value))}>{scanTargets.map((target) => <option value={target.id} key={target.id}>{target.name} ({target.environment})</option>)}</select></label>}
-            <button className="primary-button" onClick={startScan} disabled={busy || !selectedTarget || data.safety.kill_switch_engaged} title={data.safety.kill_switch_engaged ? "Clear the safety stop to start a scan" : selectedTarget ? `Run bounded checks against ${selectedTarget.name}` : "Add or authorize an allowlisted target to enable scans"}>
-              <span aria-hidden="true">＋</span>{busy ? "Starting…" : "New scan"}
-            </button>
+          <div className="posture-card">
+            <div className="posture-card-head"><span><Gauge size={15} /> POSTURE SCORE</span><b>LIVE</b></div>
+            <div className="posture-gauge" style={{ background: `conic-gradient(var(--blue) ${riskScore * 3.6}deg, #243037 0deg)` }}>
+              <div><strong>{riskScore}</strong><span>/ 100</span><small>{postureLabel}</small></div>
+            </div>
+            <div className="posture-stats">
+              <div><AlertTriangle size={14} /><span><b>{data.severity.critical ?? 0}</b>Critical</span></div>
+              <div><CircleDot size={14} /><span><b>{openFindings}</b>Open</span></div>
+              <div><Crosshair size={14} /><span><b>{data.summary.targets}</b>In scope</span></div>
+            </div>
           </div>
-        </div>
+        </section>
 
         {loadError && <div className="alert" role="alert"><span className="alert-icon">!</span><div><b>Workspace connection issue</b><p>{loadError} Check that the API and database services are running.</p></div><button className="inline-button" onClick={() => void refreshDashboard(true)}>Retry</button></div>}
         {actionError && <div className="alert" role="alert"><span className="alert-icon">!</span><div><b>Action could not be completed</b><p>{actionError}</p></div><button className="dismiss-button" aria-label="Dismiss error" onClick={() => setActionError("")}>×</button></div>}
         {notice && <div className="notice" role="status"><span aria-hidden="true">✓</span><p>{notice}</p><button className="dismiss-button" aria-label="Dismiss notice" onClick={() => setNotice("")}>×</button></div>}
         {data.safety.kill_switch_engaged && <div className="halt-banner" role="status"><span aria-hidden="true">Ⅱ</span><div><b>Safety stop is engaged</b><p>{data.safety.reason || "New scans are blocked until you resume scan activity."}</p></div></div>}
 
-        <div className="section-heading"><div><h2>At a glance</h2><p>Live summary from your 007 workspace</p></div><div className="heading-actions"><span className="refresh-note"><i className={refreshing ? "spin" : ""} aria-hidden="true">↻</i>{updatedLabel}</span><button className="refresh-button" onClick={() => void refreshDashboard(true)} disabled={refreshing} aria-label="Refresh dashboard" title="Refresh dashboard">↻</button></div></div>
+        <div className="section-heading command-section-heading"><div><span className="section-index">01</span><h2>Operational pulse</h2><p>What needs your attention right now</p></div><div className="heading-actions"><span className="refresh-note">{updatedLabel}</span><button className="refresh-button" onClick={() => void refreshDashboard(true)} disabled={refreshing} aria-label="Refresh dashboard"><RefreshCw className={refreshing ? "spin" : ""} size={14} /></button></div></div>
 
-        <div className="metric-grid">
-          <Metric label="ACTIVE SCANS" value={data.summary.active_scans} icon="◉" tone="blue" detail="Queued or running" />
-          <Metric label="VERIFIED FINDINGS" value={data.summary.verified_findings} icon="⚑" tone="red" detail="Independently confirmed" />
-          <Metric label="PENDING REVIEW" value={(data.summary.pending_reviews ?? 0)} icon="⚖" tone="amber" detail="Human approval gates" />
-          <Metric label="AUTHORIZED TARGETS" value={data.summary.targets} icon="◎" tone="green" detail="Allowlist validated" />
+        <div className="metric-grid command-metrics">
+          <Metric label="ACTIVE SCANS" value={data.summary.active_scans} icon={<Radar size={18} />} tone="blue" detail="Running now" bars={[42, 68, 48, 82, 58]} />
+          <Metric label="VERIFIED RISKS" value={data.summary.verified_findings} icon={<AlertTriangle size={18} />} tone="red" detail="Confirmed findings" bars={[70, 58, 76, 45, 62]} />
+          <Metric label="REVIEW QUEUE" value={(data.summary.pending_reviews ?? 0)} icon={<UsersRound size={18} />} tone="violet" detail="Awaiting decision" bars={[28, 45, 38, 60, 72]} />
+          <Metric label="ENDPOINTS" value={data.summary.endpoints} icon={<Database size={18} />} tone="green" detail={`${data.summary.targets} authorized targets`} bars={[32, 44, 57, 68, 86]} />
         </div>
 
         {/* Human Review Queue Card */}
@@ -484,6 +517,9 @@ export default function Dashboard() {
   </main>;
 }
 
-function Metric({ label, value, icon, tone, detail }: { label: string; value: number; icon: string; tone: string; detail: string }) {
-  return <article className="metric-card"><div className={`metric-icon ${tone}`} aria-hidden="true">{icon}</div><div className="metric-label">{label}</div><div className="metric-value">{value.toLocaleString()}</div><div className="metric-detail">{detail}</div><div className={`metric-accent ${tone}`}/></article>;
+function Metric({ label, value, icon, tone, detail, bars }: { label: string; value: number; icon: React.ReactNode; tone: string; detail: string; bars: number[] }) {
+  return <article className={`metric-card metric-${tone}`}>
+    <div className="metric-top"><div className={`metric-icon ${tone}`} aria-hidden="true">{icon}</div><div className="metric-label">{label}</div><button aria-label={`View ${label.toLowerCase()}`}>↗</button></div>
+    <div className="metric-body"><div><div className="metric-value">{value.toLocaleString()}</div><div className="metric-detail">{detail}</div></div><div className="metric-spark" aria-hidden="true">{bars.map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div></div>
+  </article>;
 }
