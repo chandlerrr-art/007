@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -249,5 +249,31 @@ class VulnerabilityComplianceMapping(Base):
     vulnerability_id: Mapped[int] = mapped_column(ForeignKey("discovered_vulnerabilities.id", ondelete="CASCADE"), nullable=False)
     framework_id: Mapped[int] = mapped_column(ForeignKey("compliance_frameworks.id", ondelete="CASCADE"), nullable=False)
     rationale: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CICDBuildEvaluation(Base):
+    __tablename__ = "cicd_build_evaluations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_id: Mapped[int] = mapped_column(ForeignKey("targets.id", ondelete="CASCADE"), nullable=False)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("vulnerability_scans.id", ondelete="CASCADE"), nullable=False)
+    pipeline_provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    repository: Mapped[str] = mapped_column(String(500), default="")
+    commit_hash: Mapped[str] = mapped_column(String(200), default="")
+    branch: Mapped[str] = mapped_column(String(200), default="")
+    gate_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    policy_snapshot_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    policy_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WebhookSubscription(Base):
+    __tablename__ = "webhook_subscriptions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_id: Mapped[int | None] = mapped_column(ForeignKey("targets.id", ondelete="CASCADE"), nullable=True)
+    url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    secret_key: Mapped[str] = mapped_column(String(1000), nullable=False)  # encrypted at rest
+    events: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

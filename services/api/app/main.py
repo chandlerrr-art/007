@@ -8,7 +8,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_db
@@ -30,6 +30,8 @@ from app.models import (
     TrafficLogEntry,
     VulnerabilityScan,
     RemediationTicket,
+    CICDBuildEvaluation,
+    WebhookSubscription,
 )
 from app.inventory.service import (
     classify_endpoints,
@@ -42,6 +44,7 @@ from app.inventory.service import (
 )
 from app.safety.credentials import (
     decrypt_secret,
+    encrypt_secret,
     get_call_time_auth_headers,
     scrub_known_secrets,
     store_credential,
@@ -60,6 +63,8 @@ from app.vulnerability.engine import run_vulnerability_scan
 from app.remediation.compliance import target_posture
 from app.remediation.reporting import executive_report, render_html
 from app.remediation.ticketing import TicketingError, create_ticket, sync_ticket
+from app.cicd.gates import evaluate_gate
+from app.cicd.webhooks import WebhookDeliveryError, dispatch_event, dispatch_subscription
 
 app = FastAPI(title="007 API", version="0.1.0", description="Local-first authorized security testing platform")
 app.add_middleware(
@@ -1438,4 +1443,119 @@ def get_executive_report(target_id: int, format: Literal["json", "html"] = "json
     if format == "html":
         return HTMLResponse(render_html(report), headers={"Content-Disposition": f'attachment; filename="target-{target_id}-executive-report.html"'})
     return report
+
+
+# ============================================================================
+# Phase 4: CI/CD pipeline gates and signed webhooks
+# ============================================================================
+
+class CICDEvaluateRequest(BaseModel):
+    scan_id: int = Field(gt=0)
+    pipeline_provider: Literal["github_actions", "gitlab_ci", "generic"] = "generic"
+    repository: str = Field(default="", max_length=500)
+    commit_hash: str = Field(default="", max_length=200)
+    branch: str = Field(default="", max_length=200)
+    policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class WebhookSubscriptionRequest(BaseModel):
+    id: int | None = Field(default=None, gt=0)
+    target_id: int | None = Field(default=None, gt=0)
+    url: str = Field(min_length=8, max_length=2000)
+    secret_key: str | None = Field(default=None, min_length=16, max_length=500)
+    events: list[str] = Field(min_length=1, max_length=20)
+    is_active: bool = True
+
+
+class WebhookTestRequest(BaseModel):
+    subscription_id: int = Field(gt=0)
+
+
+VALID_WEBHOOK_EVENTS = {"scan.completed", "vulnerability.critical_detected", "gate.failed"}
+
+
+def _webhook_public(subscription: WebhookSubscription) -> dict[str, Any]:
+    return {"id": subscription.id, "target_id": subscription.target_id, "url": subscription.url,
+            "events": subscription.events, "is_active": subscription.is_active,
+            "created_at": subscription.created_at, "secret_configured": bool(subscription.secret_key)}
+
+
+@app.post("/api/targets/{target_id}/cicd/evaluate")
+def evaluate_cicd_gate(target_id: int, payload: CICDEvaluateRequest, background: BackgroundTasks, db: Session = Depends(get_db)) -> dict[str, Any]:
+    target = db.get(Target, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Target not found.")
+    scan = db.get(VulnerabilityScan, payload.scan_id)
+    if scan is None or scan.target_id != target_id:
+        raise HTTPException(status_code=404, detail="Scan not found for target.")
+    if scan.status != "completed":
+        raise HTTPException(status_code=409, detail="The scan must be completed before gate evaluation.")
+    allowed_severity = {"critical", "high", "medium", "low", "info"}
+    policy = payload.policy
+    for name in ("fail_on_severities", "warn_on_severities"):
+        if name in policy and (not isinstance(policy[name], list) or any(str(x).lower() not in allowed_severity for x in policy[name])):
+            raise HTTPException(status_code=422, detail=f"{name} must contain valid severity levels.")
+    for name in ("fail_cvss_above", "warn_cvss_above"):
+        if name in policy and (not isinstance(policy[name], (int, float)) or not 0 <= policy[name] <= 10):
+            raise HTTPException(status_code=422, detail=f"{name} must be between 0 and 10.")
+    vulnerabilities = db.execute(select(DiscoveredVulnerability).join(Endpoint).where(
+        DiscoveredVulnerability.scan_id == scan.id, Endpoint.target_id == target_id)).scalars().all()
+    result = evaluate_gate(vulnerabilities, policy)
+    evaluation = CICDBuildEvaluation(target_id=target_id, scan_id=scan.id,
+        pipeline_provider=payload.pipeline_provider, repository=payload.repository,
+        commit_hash=payload.commit_hash, branch=payload.branch, gate_status=result["gate_status"],
+        policy_snapshot_id=result["policy_snapshot_id"], policy_snapshot=policy)
+    db.add(evaluation)
+    db.commit()
+    db.refresh(evaluation)
+    result.update({"evaluation_id": evaluation.id, "target_id": target_id, "scan_id": scan.id,
+                   "pipeline_provider": payload.pipeline_provider})
+    if result["gate_status"] == "failed":
+        background.add_task(dispatch_event, db, target_id, "gate.failed", result)
+    return result
+
+
+@app.get("/api/webhooks")
+def list_webhook_subscriptions(target_id: int | None = None, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    stmt = select(WebhookSubscription)
+    if target_id is not None:
+        stmt = stmt.where(or_(WebhookSubscription.target_id.is_(None), WebhookSubscription.target_id == target_id))
+    return [_webhook_public(item) for item in db.execute(stmt.order_by(WebhookSubscription.id)).scalars().all()]
+
+
+@app.post("/api/webhooks", status_code=201)
+def upsert_webhook_subscription(payload: WebhookSubscriptionRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    unknown = set(payload.events) - VALID_WEBHOOK_EVENTS
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unsupported webhook events: {', '.join(sorted(unknown))}")
+    if payload.target_id is not None and db.get(Target, payload.target_id) is None:
+        raise HTTPException(status_code=404, detail="Target not found.")
+    if payload.id is not None:
+        subscription = db.get(WebhookSubscription, payload.id)
+        if subscription is None:
+            raise HTTPException(status_code=404, detail="Webhook subscription not found.")
+        subscription.url, subscription.target_id = payload.url, payload.target_id
+        subscription.events, subscription.is_active = sorted(set(payload.events)), payload.is_active
+        if payload.secret_key:
+            subscription.secret_key = encrypt_secret(payload.secret_key)
+        db.commit(); db.refresh(subscription)
+        return _webhook_public(subscription)
+    if not payload.secret_key:
+        raise HTTPException(status_code=422, detail="secret_key is required when creating a subscription.")
+    subscription = WebhookSubscription(target_id=payload.target_id, url=payload.url,
+        secret_key=encrypt_secret(payload.secret_key), events=sorted(set(payload.events)), is_active=payload.is_active)
+    db.add(subscription); db.commit(); db.refresh(subscription)
+    return _webhook_public(subscription)
+
+
+@app.post("/api/webhooks/test")
+async def test_webhook_subscription(payload: WebhookTestRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    subscription = db.get(WebhookSubscription, payload.subscription_id)
+    if subscription is None:
+        raise HTTPException(status_code=404, detail="Webhook subscription not found.")
+    try:
+        result = await dispatch_subscription(subscription, "webhook.test", {"message": "007 webhook connectivity test"})
+    except WebhookDeliveryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return result
 

@@ -1,0 +1,63 @@
+name: 007 Security Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_id:
+        description: Authorized 007 target ID
+        required: true
+        type: string
+  push:
+    branches: [main]
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ vars['007_API_URL'] }}
+      TARGET_ID: ${{ inputs.target_id || vars['007_TARGET_ID'] }}
+    steps:
+      - name: Validate configuration
+        shell: bash
+        run: |
+          test -n "$API_URL" || { echo "Set repository variable 007_API_URL"; exit 2; }
+          test -n "$TARGET_ID" || { echo "Set repository variable 007_TARGET_ID or provide workflow_dispatch input"; exit 2; }
+      - name: Start authorized vulnerability scan
+        id: scan
+        shell: bash
+        run: |
+          response=$(curl --fail-with-body --silent --show-error -X POST "$API_URL/api/targets/$TARGET_ID/scans" \
+            -H 'Content-Type: application/json' -d '{"profile":"quick"}')
+          echo "scan_id=$(jq -r .id <<< "$response")" >> "$GITHUB_OUTPUT"
+      - name: Wait for scan completion
+        shell: bash
+        env:
+          SCAN_ID: ${{ steps.scan.outputs.scan_id }}
+        run: |
+          for attempt in $(seq 1 60); do
+            response=$(curl --fail-with-body --silent --show-error "$API_URL/api/targets/$TARGET_ID/scans/$SCAN_ID")
+            status=$(jq -r .status <<< "$response")
+            if [ "$status" = completed ]; then exit 0; fi
+            if [ "$status" = failed ]; then echo "$response"; exit 2; fi
+            sleep 5
+          done
+          echo "Timed out waiting for scan $SCAN_ID"; exit 2
+      - name: Evaluate security gate
+        shell: bash
+        env:
+          SCAN_ID: ${{ steps.scan.outputs.scan_id }}
+        run: |
+          jq -n --argjson scan_id "$SCAN_ID" --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit "$GITHUB_SHA" --arg branch "$GITHUB_REF_NAME" \
+            '{scan_id:$scan_id,pipeline_provider:"github_actions",repository:$repository,commit_hash:$commit,branch:$branch,policy:{fail_on_severities:["critical"],warn_on_severities:["high"]}}' > request.json
+          curl --fail-with-body --silent --show-error -X POST "$API_URL/api/targets/$TARGET_ID/cicd/evaluate" \
+            -H 'Content-Type: application/json' --data-binary @request.json -o gate-result.json
+          cat gate-result.json
+          jq -e '.exit_code == 0' gate-result.json >/dev/null
+      - name: Upload gate result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 007-gate-result
+          path: gate-result.json
+          if-no-files-found: ignore

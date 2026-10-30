@@ -1,0 +1,40 @@
+stages:
+  - security
+
+007-security-scan:
+  stage: security
+  image: alpine:3.20
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event" || $CI_PIPELINE_SOURCE == "web"'
+  before_script:
+    - apk add --no-cache curl jq
+    - API_URL="$(printenv '007_API_URL' || true)"; export API_URL
+    - TARGET_ID="$(printenv '007_TARGET_ID' || true)"; export TARGET_ID
+    - test -n "$API_URL" || (echo "Set CI/CD variable 007_API_URL" && exit 2)
+    - test -n "$TARGET_ID" || (echo "Set CI/CD variable 007_TARGET_ID" && exit 2)
+  script:
+    - |
+      scan=$(curl --fail-with-body --silent --show-error -X POST "$API_URL/api/targets/$TARGET_ID/scans" \
+        -H 'Content-Type: application/json' -d '{"profile":"quick"}')
+      scan_id=$(echo "$scan" | jq -r .id)
+      echo "Started 007 vulnerability scan $scan_id"
+      for attempt in $(seq 1 60); do
+        result=$(curl --fail-with-body --silent --show-error "$API_URL/api/targets/$TARGET_ID/scans/$scan_id")
+        status=$(echo "$result" | jq -r .status)
+        if [ "$status" = completed ]; then break; fi
+        if [ "$status" = failed ]; then echo "$result"; exit 2; fi
+        sleep 5
+      done
+      test "$status" = completed || (echo "Scan timed out" && exit 2)
+      jq -n --argjson scan_id "$scan_id" --arg repository "$CI_PROJECT_URL" \
+        --arg commit "$CI_COMMIT_SHA" --arg branch "$CI_COMMIT_REF_NAME" \
+        '{scan_id:$scan_id,pipeline_provider:"gitlab_ci",repository:$repository,commit_hash:$commit,branch:$branch,policy:{fail_on_severities:["critical"],warn_on_severities:["high"]}}' > gate-request.json
+      curl --fail-with-body --silent --show-error -X POST "$API_URL/api/targets/$TARGET_ID/cicd/evaluate" \
+        -H 'Content-Type: application/json' --data-binary @gate-request.json -o gate-result.json
+      cat gate-result.json
+      jq -e '.exit_code == 0' gate-result.json >/dev/null
+  artifacts:
+    when: always
+    paths:
+      - gate-result.json
+    expire_in: 30 days
