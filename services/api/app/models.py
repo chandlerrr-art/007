@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -10,6 +10,7 @@ from app.safety.credentials import TestAccountCredential
 class Target(Base):
     __tablename__ = "targets"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, default=1, index=True)
     name: Mapped[str] = mapped_column(String(160))
     base_url: Mapped[str] = mapped_column(String(500))
     environment: Mapped[str] = mapped_column(String(40))
@@ -264,6 +265,41 @@ class CICDBuildEvaluation(Base):
     gate_status: Mapped[str] = mapped_column(String(20), nullable=False)
     policy_snapshot_id: Mapped[str] = mapped_column(String(100), nullable=False)
     policy_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Organization(Base):
+    __tablename__ = "organizations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    slug: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WorkspaceUser(Base):
+    __tablename__ = "workspace_users"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "user_id", name="uq_workspace_org_user"),
+        CheckConstraint("workspace_role in ('org_admin', 'security_engineer', 'developer')", name="ck_workspace_role"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    workspace_role: Mapped[str] = mapped_column(String(40), nullable=False)
+    permissions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CodePatch(Base):
+    __tablename__ = "code_patches"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    vulnerability_id: Mapped[int] = mapped_column(ForeignKey("discovered_vulnerabilities.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    unified_diff: Mapped[str] = mapped_column(Text(), nullable=False)
+    ai_confidence_score: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="generated")
+    application_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

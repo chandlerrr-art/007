@@ -209,3 +209,14 @@ services\api\tests\test_vulnerability_engine.py ............             [100%]
 - Added best-effort event dispatch for completed scans, critical findings, and failed gates.
 - Added Phase 4 tests for gate thresholds, HMAC generation, dispatch filtering/signatures, and updated migration verification.
 - Verification: **64 API tests passed**; four pre-existing deprecation/collection warnings remain.
+
+## Phase 5: AI patch candidates and enterprise workspace RBAC
+
+- Added migration `0010_enterprise_ai_patching.py` with patch records, organizations, workspace memberships, and `targets.organization_id`. Existing targets are assigned to a seeded default workspace.
+- Added HS256 signed workspace-token verification. Active role and permission grants are resolved from `workspace_users`; tenant filters scope ORM reads and bulk updates/deletes across targets, scans, endpoints, vulnerabilities, tickets, patches, webhook subscriptions, and related records.
+- Added role permissions for organization admins, security engineers, and developers, including explicit gates for scan execution, ticket creation, patch generation, review, and application. `GET /api/workspaces/context` reports the effective permission boundary.
+- Added a pluggable patch inference provider contract and conservative built-in generators for parameterized Python SQL, BOLA ownership guards, and integer validation markers. Unsupported source patterns fail closed. Generated unified diffs include confidence and rationale; source is supplied by the caller and is not stored.
+- Added `POST /api/vulnerabilities/{id}/patch`, patch review, and `POST /api/patches/{id}/apply`. Application requires approval and only simulates or records status; it does not modify repository files.
+- Enterprise API requests require `ENTERPRISE_AUTH_SECRET` and a trusted HS256 identity issuer when `ENTERPRISE_AUTH_ENABLED=true`; configure the secret in the environment and provision active workspace memberships before issuing tokens.
+- Added Phase 5 tests for diff format/confidence, model-provider validation, cross-workspace query isolation, permission denials, and review-gated application.
+- Verification: **71 API tests passed**; four pre-existing warnings remain.

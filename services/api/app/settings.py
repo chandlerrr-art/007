@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     github_owner: str = ""
     github_repo: str = ""
     github_token: str = ""
+    enterprise_auth_enabled: bool = True
+    enterprise_auth_secret: str = ""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

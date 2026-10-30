@@ -32,6 +32,8 @@ from app.models import (
     RemediationTicket,
     CICDBuildEvaluation,
     WebhookSubscription,
+    CodePatch,
+    Organization,
 )
 from app.inventory.service import (
     classify_endpoints,
@@ -65,6 +67,16 @@ from app.remediation.reporting import executive_report, render_html
 from app.remediation.ticketing import TicketingError, create_ticket, sync_ticket
 from app.cicd.gates import evaluate_gate
 from app.cicd.webhooks import WebhookDeliveryError, dispatch_event, dispatch_subscription
+from app.ai.patcher import PatchGenerationError, generate_patch
+from app.auth.rbac import (
+    WorkspaceContext,
+    ensure_target_access,
+    ensure_vulnerability_access,
+    get_workspace_context,
+    require_permission,
+    require_session_permission,
+    ALL_PERMISSIONS,
+)
 
 app = FastAPI(title="007 API", version="0.1.0", description="Local-first authorized security testing platform")
 app.add_middleware(
@@ -466,7 +478,7 @@ def create_target(payload: TargetCreate, db: Session = Depends(get_db)) -> dict:
         db.add(AuditEvent(event_type="target_registration_denied", decision="deny", details="Target registration blocked by the configured origin allowlist."))
         db.commit()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    target = Target(name=payload.name, base_url=payload.base_url.rstrip("/"), environment=payload.environment,
+    target = Target(name=payload.name, organization_id=db.info.get("organization_id", 1), base_url=payload.base_url.rstrip("/"), environment=payload.environment,
                     status="authorized", scope_note=payload.scope_note)
     db.add(target)
     db.flush()
@@ -952,6 +964,7 @@ def list_changes(db: Session = Depends(get_db)) -> list[dict]:
 
 @app.post("/api/webhooks/deploy", status_code=202, response_model=DeployResponse)
 def deploy_webhook(payload: DeployWebhook, background: BackgroundTasks, db: Session = Depends(get_db)) -> dict:
+    require_session_permission(db, "scans.execute")
     target = db.get(Target, payload.target_id)
     if not target:
         raise HTTPException(status_code=404, detail="Target not found.")
@@ -998,6 +1011,7 @@ def deploy_webhook(payload: DeployWebhook, background: BackgroundTasks, db: Sess
 
 @app.post("/api/scans", status_code=202, response_model=ScanAcceptedResponse)
 def start_scan(payload: ScanCreate, background: BackgroundTasks, db: Session = Depends(get_db)) -> dict:
+    require_session_permission(db, "scans.execute")
     control = get_safety_control(db, lock=True)
     if control.kill_switch_engaged:
         db.add(AuditEvent(event_type="scan_request_denied", decision="deny", details="Manual scan request blocked because the kill switch is engaged."))
@@ -1040,6 +1054,7 @@ def start_scan(payload: ScanCreate, background: BackgroundTasks, db: Session = D
 
 @app.post("/api/scans/{scan_id}/cancel", response_model=CancelResponse)
 def cancel_scan(scan_id: int, db: Session = Depends(get_db)) -> dict:
+    require_session_permission(db, "scans.execute")
     scan = db.get(Scan, scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found.")
@@ -1104,6 +1119,7 @@ def scan_report(scan_id: int, db: Session = Depends(get_db)) -> dict:
 
 @app.post("/api/findings/{finding_id}/retest", status_code=202, response_model=RetestAcceptedResponse)
 def retest_finding(finding_id: int, background: BackgroundTasks, db: Session = Depends(get_db)) -> dict:
+    require_session_permission(db, "scans.execute")
     control = get_safety_control(db, lock=True)
     if control.kill_switch_engaged:
         db.add(AuditEvent(event_type="retest_request_denied", decision="deny", details="Retest request blocked because the kill switch is engaged."))
@@ -1204,6 +1220,7 @@ def trigger_target_vulnerability_scan(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Initialize and trigger an asynchronous Phase 2 vulnerability scan with configurable scan profiles."""
+    require_session_permission(db, "scans.execute")
     target = db.get(Target, target_id)
     if not target:
         raise HTTPException(status_code=404, detail="Target not found.")
@@ -1403,6 +1420,7 @@ class TicketCreateRequest(BaseModel):
 
 @app.post("/api/vulnerabilities/{vulnerability_id}/tickets", status_code=201)
 def create_vulnerability_ticket(vulnerability_id: int, payload: TicketCreateRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    require_session_permission(db, "tickets.create")
     try:
         ticket = create_ticket(db, vulnerability_id, payload.external_system)
     except LookupError as exc:
@@ -1416,6 +1434,7 @@ def create_vulnerability_ticket(vulnerability_id: int, payload: TicketCreateRequ
 
 @app.post("/api/remediation/tickets/{ticket_id}/sync")
 def sync_remediation_ticket(ticket_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
+    require_session_permission(db, "tickets.create")
     ticket = db.get(RemediationTicket, ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail="Ticket not found.")
@@ -1557,5 +1576,95 @@ async def test_webhook_subscription(payload: WebhookTestRequest, db: Session = D
         result = await dispatch_subscription(subscription, "webhook.test", {"message": "007 webhook connectivity test"})
     except WebhookDeliveryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return result
+
+
+# ============================================================================
+# Phase 5: Enterprise workspace context and reviewed patch candidates
+# ============================================================================
+
+class PatchGenerateRequest(BaseModel):
+    target_file_path: str = Field(min_length=1, max_length=1000)
+    source_code: str = Field(min_length=1, max_length=200_000)
+    db_dialect: Literal["sqlite", "postgresql", "mysql"] | None = None
+
+
+class PatchReviewRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+
+
+class PatchApplyRequest(BaseModel):
+    mode: Literal["simulate", "record"] = "simulate"
+
+
+def _patch_public(patch: CodePatch) -> dict[str, Any]:
+    return {"id": patch.id, "vulnerability_id": patch.vulnerability_id, "target_file_path": patch.target_file_path,
+            "unified_diff": patch.unified_diff, "ai_confidence_score": patch.ai_confidence_score,
+            "status": patch.status, "application_mode": patch.application_mode, "created_at": patch.created_at}
+
+
+@app.get("/api/workspaces/context")
+def workspace_context(context: WorkspaceContext = Depends(get_workspace_context)) -> dict[str, Any]:
+    effective = set(context.permissions)
+    if "*" in effective:
+        effective = ALL_PERMISSIONS
+    return {"organization": {"id": context.organization_id, "name": context.organization_name},
+            "user_id": context.user_id, "workspace_role": context.workspace_role,
+            "permissions": sorted(effective), "permission_boundaries": {"granted": sorted(effective), "not_granted": sorted(ALL_PERMISSIONS - effective)}}
+
+
+@app.post("/api/vulnerabilities/{vulnerability_id}/patch", status_code=201)
+def generate_vulnerability_patch(vulnerability_id: int, payload: PatchGenerateRequest,
+                                 context: WorkspaceContext = Depends(get_workspace_context),
+                                 db: Session = Depends(get_db)) -> dict[str, Any]:
+    require_permission(context, "patches.generate")
+    vulnerability = ensure_vulnerability_access(db, vulnerability_id, context)
+    endpoint = db.get(Endpoint, vulnerability.endpoint_id)
+    parameter = db.get(EndpointParameter, vulnerability.parameter_id) if vulnerability.parameter_id else None
+    try:
+        candidate = generate_patch(vulnerability, payload.target_file_path, payload.source_code,
+                                   db_dialect=payload.db_dialect, endpoint_parameter=parameter.name if parameter else None)
+    except PatchGenerationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    patch = CodePatch(vulnerability_id=vulnerability.id, target_file_path=candidate.target_file_path,
+                      unified_diff=candidate.unified_diff, ai_confidence_score=candidate.confidence, status="generated")
+    db.add(patch); db.commit(); db.refresh(patch)
+    result = _patch_public(patch)
+    result.update({"strategy": candidate.strategy, "rationale": candidate.rationale,
+                   "endpoint": {"method": endpoint.method, "path": endpoint.path} if endpoint else None,
+                   "review_required": True, "repository_modified": False})
+    return result
+
+
+@app.post("/api/patches/{patch_id}/review")
+def review_patch(patch_id: int, payload: PatchReviewRequest,
+                 context: WorkspaceContext = Depends(get_workspace_context), db: Session = Depends(get_db)) -> dict[str, Any]:
+    require_permission(context, "patches.review")
+    patch = db.get(CodePatch, patch_id)
+    if patch is None:
+        raise HTTPException(status_code=404, detail="Patch not found.")
+    ensure_vulnerability_access(db, patch.vulnerability_id, context)
+    if patch.status != "generated":
+        raise HTTPException(status_code=409, detail="Only generated patches can be reviewed.")
+    patch.status = "reviewed" if payload.decision == "approved" else "rejected"
+    db.commit(); db.refresh(patch)
+    return _patch_public(patch)
+
+
+@app.post("/api/patches/{patch_id}/apply")
+def apply_patch(patch_id: int, payload: PatchApplyRequest = PatchApplyRequest(),
+                context: WorkspaceContext = Depends(get_workspace_context), db: Session = Depends(get_db)) -> dict[str, Any]:
+    require_permission(context, "patches.apply")
+    patch = db.get(CodePatch, patch_id)
+    if patch is None:
+        raise HTTPException(status_code=404, detail="Patch not found.")
+    ensure_vulnerability_access(db, patch.vulnerability_id, context)
+    if patch.status != "reviewed":
+        raise HTTPException(status_code=409, detail="A patch must be approved by a reviewer before application.")
+    patch.status = "applied"
+    patch.application_mode = payload.mode
+    db.commit(); db.refresh(patch)
+    result = _patch_public(patch)
+    result.update({"repository_modified": False, "message": "Patch application was recorded; no repository file was changed."})
     return result
 
