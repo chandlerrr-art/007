@@ -69,15 +69,17 @@ class TokenBucket:
 endpoint_rate_limiter = TokenBucket(capacity=3, refill_per_second=0.5)
 
 
-def origin(url: str) -> str:
+def origin(url: str, *, allow_path: bool = False) -> str:
     try:
-        parsed = urlsplit(url)
+        parsed = urlsplit(url.strip())
         port = parsed.port
     except ValueError as exc:
         raise ScopeRejected("Target URL is malformed or has an invalid port.") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
         raise ScopeRejected("Target must be an HTTP(S) URL without embedded credentials.")
-    if parsed.query or parsed.fragment:
+    if not allow_path and parsed.path not in {"", "/"}:
+        raise ScopeRejected("Target base URL must be an exact origin without a path.")
+    if not allow_path and (parsed.query or parsed.fragment):
         raise ScopeRejected("Target base URL cannot contain a query or fragment.")
     default_port = 443 if parsed.scheme == "https" else 80
     suffix = f":{port}" if port and port != default_port else ""
@@ -96,7 +98,7 @@ def allowed_origins() -> set[str]:
 
 
 def validate_target_url(url: str) -> str:
-    target_origin = origin(url)
+    target_origin = origin(url, allow_path=False)
     if target_origin not in allowed_origins():
         raise ScopeRejected(f"Target origin {target_origin} is not in the configured allowlist.")
     return target_origin
@@ -126,7 +128,7 @@ def supports_staging_executor(target: Target) -> bool:
 def assert_request_scope(target: Target, request_url: str) -> None:
     """Revalidate target configuration and each outgoing request at execution time."""
     base_origin = validate_target_url(target.base_url)
-    request_origin = origin(request_url)
+    request_origin = origin(request_url, allow_path=True)
     if request_origin != base_origin or request_origin not in allowed_origins():
         raise ScopeRejected("Request URL does not match the authorized target origin.")
 

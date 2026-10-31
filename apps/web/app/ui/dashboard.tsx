@@ -22,11 +22,23 @@ type PendingTest = {
   created_at: string;
 };
 
+type DashboardFinding = {
+  id: number;
+  title: string;
+  category: string;
+  severity: string;
+  confidence: string;
+  verified: boolean;
+  status: string;
+  path: string;
+  target: string;
+};
+
 type DashboardData = {
   summary: { active_scans: number; verified_findings: number; endpoints: number; targets: number; pending_reviews?: number };
   severity: Record<string, number>;
   targets: { id: number; name: string; base_url: string; environment: string; status: string }[];
-  findings: { id: number; title: string; category: string; severity: string; confidence: string; verified: boolean; status: string; path: string; target: string }[];
+  findings: DashboardFinding[];
   scans: { id: number; target: string; status: string; trigger: string; started_at: string; summary: string }[];
   changes: { id: number; target: string; source: string; detail: string; created_at: string }[];
   safety: { kill_switch_engaged: boolean; reason: string };
@@ -92,6 +104,7 @@ export default function Dashboard() {
   const [targetUrl, setTargetUrl] = useState("");
   const [targetEnvironment, setTargetEnvironment] = useState("staging");
   const [selectedTargetId, setSelectedTargetId] = useState<number | null>(null);
+  const [findingFilter, setFindingFilter] = useState<"all" | "critical" | "high">("all");
 
   const scanTargets = useMemo(() => data.targets.filter(supportsScan), [data.targets]);
   const selectedTarget = scanTargets.find((target) => target.id === selectedTargetId) ?? scanTargets[0];
@@ -315,6 +328,9 @@ export default function Dashboard() {
   const pendingFindings = data.findings.filter((f) => f.status === "pending_review");
   const pendingTests = data.pending_tests ?? [];
   const hasReviewQueue = pendingFindings.length > 0 || pendingTests.length > 0;
+  const visibleFindings = findingFilter === "all"
+    ? data.findings
+    : data.findings.filter((finding) => finding.severity === findingFilter);
   const openFindings = Object.values(data.severity).reduce((total, value) => total + value, 0);
   const riskScore = Math.max(12, 100 - (data.severity.critical ?? 0) * 18 - (data.severity.high ?? 0) * 9 - (data.severity.medium ?? 0) * 4 - (data.severity.low ?? 0));
   const postureLabel = riskScore >= 85 ? "Strong" : riskScore >= 65 ? "Guarded" : "At risk";
@@ -474,9 +490,11 @@ export default function Dashboard() {
         )}
 
         <div className="main-grid">
-          <section className="card findings-card" id="findings"><div className="card-head"><div><h2>Recent findings</h2><p>Review confidence, lifecycle, and safe retest actions</p></div><span className="period-label">LATEST</span></div>
+          <section className="card findings-card" id="findings"><div className="card-head"><div><h2>Recent findings</h2><p>Review confidence, lifecycle, and safe retest actions</p></div><div className="finding-card-actions"><div className="finding-filters" role="group" aria-label="Filter findings by severity">
+            {(["all", "critical", "high"] as const).map((filter) => <button key={filter} className={findingFilter === filter ? "selected" : ""} aria-pressed={findingFilter === filter} onClick={() => setFindingFilter(filter)}>{filter === "all" ? "All" : filter} <span>{filter === "all" ? data.findings.length : data.findings.filter((finding) => finding.severity === filter).length}</span></button>)}
+          </div><span className="period-label">LATEST</span></div></div>
             <div className="table-wrap"><table><thead><tr><th>FINDING</th><th>TARGET / ENDPOINT</th><th>SEVERITY</th><th>CONFIDENCE</th><th>LIFECYCLE</th><th>ACTION</th></tr></thead><tbody>
-              {data.findings.map((finding) => <tr key={finding.id}><td><div className="finding-title">{finding.title}</div><div className="muted">SF-{String(finding.id).padStart(4, "0")} · {finding.category.replaceAll("_", " ")}</div></td><td><div className="target-name">{finding.target}</div><code>{finding.path}</code></td><td><span className={`severity ${finding.severity}`}>{finding.severity}</span></td><td><span className={`confidence ${finding.confidence}`}>{finding.confidence}</span></td><td><span className={`lifecycle ${finding.status}`}><i/>{finding.status.replaceAll("_", " ")}</span><small className={`verification ${finding.verified ? "verified" : "review"}`}>{finding.verified ? "Verified" : "Needs review"}</small></td><td>
+              {visibleFindings.map((finding) => <tr key={finding.id}><td><div className="finding-title">{finding.title}</div><div className="muted">SF-{String(finding.id).padStart(4, "0")} · {finding.category.replaceAll("_", " ")}</div></td><td><div className="target-name">{finding.target}</div><code>{finding.path}</code></td><td><span className={`severity ${finding.severity}`}>{finding.severity}</span></td><td><span className={`confidence ${finding.confidence}`}>{finding.confidence}</span></td><td><span className={`lifecycle ${finding.status}`}><i/>{finding.status.replaceAll("_", " ")}</span><small className={`verification ${finding.verified ? "verified" : "review"}`}>{finding.verified ? "Verified" : "Needs review"}</small></td><td>
                 {finding.status === "pending_review" && (
                   <div style={{ display: "flex", gap: "6px" }}>
                     <button className="text-button" style={{ color: "#059669" }} onClick={() => approveFinding(finding.id)}>Approve</button>
@@ -484,8 +502,19 @@ export default function Dashboard() {
                   </div>
                 )}
                 {finding.verified && (finding.status === "open" || finding.status === "approved") && <button className="text-button" onClick={() => retestFinding(finding.id)} disabled={data.safety.kill_switch_engaged}>Retest</button>}
+                <details className="finding-inspector"><summary><FileSearch size={13} /> Inspect finding</summary><div className="finding-inspector-content">
+                  <div><span>Finding ID</span><b>SF-{String(finding.id).padStart(4, "0")}</b></div>
+                  <div><span>Target</span><b>{finding.target}</b></div>
+                  <div><span>Endpoint</span><code>{finding.path}</code></div>
+                  <div><span>Category</span><b>{finding.category.replaceAll("_", " ")}</b></div>
+                  <div><span>Severity</span><b>{finding.severity}</b></div>
+                  <div><span>Confidence</span><b>{finding.confidence}</b></div>
+                  <div><span>Lifecycle</span><b>{finding.status.replaceAll("_", " ")}</b></div>
+                  <div><span>Verification</span><b>{finding.verified ? "Verified" : "Needs review"}</b></div>
+                </div></details>
               </td></tr>)}
               {!data.findings.length && <tr><td colSpan={6} className="empty">{loaded ? "No findings yet. Results appear after an authorized scan." : "Loading findings…"}</td></tr>}
+              {data.findings.length > 0 && !visibleFindings.length && <tr><td colSpan={6} className="empty">No {findingFilter} findings in the latest results.</td></tr>}
             </tbody></table></div>
           </section>
           <section className="card severity-card"><div className="card-head"><div><h2>Severity breakdown</h2><p>Unresolved findings by severity</p></div><span className="period-label">OPEN</span></div><div className="severity-total"><strong>{Object.values(data.severity).reduce((total, value) => total + value, 0)}</strong><span>open findings</span></div>

@@ -15,6 +15,11 @@ class TargetScopeTests(unittest.TestCase):
 
     def test_allows_configured_local_demo_origin(self) -> None:
         self.assertEqual(validate_target_url("http://demo-app:8080"), "http://demo-app:8080")
+        self.assertEqual(validate_target_url("http://demo-app:8080/"), "http://demo-app:8080")
+
+    def test_rejects_origin_with_path_component(self) -> None:
+        with self.assertRaises(ScopeRejected):
+            validate_target_url("http://demo-app:8080/api")
 
     def test_rejects_origin_outside_allowlist(self) -> None:
         with self.assertRaises(ScopeRejected):
