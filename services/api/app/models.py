@@ -4,7 +4,8 @@ from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, In
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
-from app.safety.credentials import TestAccountCredential
+# Register this model with the shared SQLAlchemy metadata.
+from app.safety.credentials import TestAccountCredential  # noqa: F401
 
 
 class Target(Base):

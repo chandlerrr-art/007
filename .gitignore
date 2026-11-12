@@ -7,3 +7,4 @@ __pycache__/
 node_modules/
 dist/
 *.tsbuildinfo
+007_api.egg-info/

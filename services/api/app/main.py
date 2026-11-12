@@ -27,13 +27,11 @@ from app.models import (
     Target,
     TestAccountCredential,
     TestExecution,
-    TrafficLogEntry,
     VulnerabilityScan,
     RemediationTicket,
     CICDBuildEvaluation,
     WebhookSubscription,
     CodePatch,
-    Organization,
 )
 from app.inventory.service import (
     classify_endpoints,
@@ -52,9 +50,7 @@ from app.inventory.openapi_importer import (
     parse_openapi_document,
 )
 from app.safety.credentials import (
-    get_call_time_auth_headers,
     register_secret_for_redaction,
-    scrub_known_secrets,
     store_credential,
 )
 from app.safety.policy import (
@@ -62,7 +58,6 @@ from app.safety.policy import (
     get_safety_control,
     redact_operational_text,
     supports_demo_executor,
-    supports_staging_executor,
     validate_target_url,
 )
 from app.scans.orchestrator import run_scan
@@ -75,7 +70,6 @@ from app.cicd.gates import evaluate_gate
 from app.cicd.webhooks import WebhookDeliveryError, dispatch_event, dispatch_subscription
 from app.auth.rbac import (
     WorkspaceContext,
-    ensure_target_access,
     ensure_vulnerability_access,
     get_workspace_context,
     require_permission,

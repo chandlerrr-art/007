@@ -1,7 +1,0 @@
-README.md
-pyproject.toml
-007_api.egg-info/PKG-INFO
-007_api.egg-info/SOURCES.txt
-007_api.egg-info/dependency_links.txt
-007_api.egg-info/requires.txt
-007_api.egg-info/top_level.txt

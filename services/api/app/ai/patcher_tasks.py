@@ -3,7 +3,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.ai.patcher import PatchGenerationError, generate_patch
+from app.ai.patcher import generate_patch
 from app.auth.rbac import ensure_vulnerability_access, require_permission, resolve_workspace_context
 from app.core.celery_app import celery_app
 from app.db import SessionLocal

@@ -10,7 +10,6 @@ import hmac
 import json
 import time
 from dataclasses import dataclass
-from typing import Any
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import event, select
@@ -18,7 +17,7 @@ from sqlalchemy.orm import Session as ORMSession, with_loader_criteria
 
 from app.db import get_db
 from app.models import (
-    AuditEvent, CICDBuildEvaluation, ChangeEvent, CodePatch, ComplianceFramework,
+    AuditEvent, CICDBuildEvaluation, ChangeEvent, CodePatch,
     DiscoveredVulnerability, Endpoint, EndpointParameter, EndpointRoleObservation,
     Evidence, Finding, InventorySnapshot, Organization, RemediationTicket, Scan,
     ScanStage, Target, TestExecution, TrafficLogEntry, VulnerabilityComplianceMapping,

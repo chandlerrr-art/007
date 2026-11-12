@@ -1,15 +1,11 @@
 from datetime import datetime, timezone
-from typing import Any
-from urllib.parse import quote, urlsplit
-
 import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AuditEvent, Endpoint, Evidence, Finding, Scan, ScanStage, Target, TestExecution
+from app.models import AuditEvent, Evidence, Finding, Scan, ScanStage, Target, TestExecution
 from app.safety.credentials import get_call_time_auth_headers, scrub_known_secrets
 from app.safety.policy import (
-    KillSwitchEngaged,
     RateLimited,
     ScopeRejected,
     assert_kill_switch_clear,
@@ -17,7 +13,6 @@ from app.safety.policy import (
     assert_request_scope,
     redact_operational_text,
     supports_staging_executor,
-    validate_target_url,
 )
 from app.settings import settings
 
